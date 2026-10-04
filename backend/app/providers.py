@@ -43,7 +43,15 @@ def respond(payload, context):
     except ValueError:
         raw = {'raw_text': response.text}
     if response.is_error:
-        raise ProviderError(f'Provider HTTP {response.status_code}', raw, response.status_code in (429, 500, 502, 503, 504))
+        message = f'Provider HTTP {response.status_code}'
+        error = raw.get('error') if isinstance(raw, dict) else None
+        if isinstance(error, dict):
+            if isinstance(error.get('message'), str):
+                message += f": {error['message']}"
+            if isinstance(error.get('param'), str):
+                message += f" (param: {error['param']})"
+        message = message.replace(settings.openai_key, '[REDACTED]')
+        raise ProviderError(message, raw, response.status_code in (429, 500, 502, 503, 504))
     return raw
 
 

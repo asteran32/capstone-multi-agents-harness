@@ -1,3 +1,6 @@
+import json
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, func, delete
 from app.api import app
@@ -6,6 +9,8 @@ from app.worker import claim, process_job
 from app.graphs import agent_graph, offline_graph
 from langgraph.checkpoint.memory import InMemorySaver
 from app.seed import seed
+from app.config import settings
+from app import providers
 
 
 def request_body(client, mode='Base'):
@@ -85,6 +90,53 @@ def test_api_worker_and_offline_job(database):
     process_job(claim(),agent,offline)
     detail = client.get('/api/calls/'+calls[0]['id']).json()
     assert {e['phase'] for e in detail['evaluations']} == {'online','offline'}
+
+
+@pytest.mark.parametrize('mode,phase', [('L1+L2', 'online'), ('Base', 'offline')])
+def test_judge_json_mode_without_json_in_user_data(database, monkeypatch, mode, phase):
+    monkeypatch.setitem(settings.__dict__, 'live_models', ('gpt-5.4-nano',))
+    monkeypatch.setitem(settings.__dict__, 'openai_key', 'test-provider-key')
+    requests = []
+
+    def provider_post(url, **kwargs):
+        payload = kwargs['json']
+        requests.append(payload)
+        assert url == 'https://api.openai.com/v1/responses'
+        assert payload['model'] == 'gpt-5.4-nano'
+        assert payload['text']['format']['type'] == 'json_object'
+        # Reproduce the API's validation of input, separately from instructions.
+        if not any('json' in item.get('content', '').lower() for item in payload['input']):
+            return httpx.Response(400, json={'error': {
+                'type': 'invalid_request_error', 'param': 'input', 'code': None,
+                'message': "Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."}})
+        user_content = next(item['content'] for item in payload['input'] if item['role'] == 'user')
+        data = json.loads(user_content)
+        # Designer/reviewer data should not need a JSON keyword to pass validation.
+        if data['role'] != 'test_runner':
+            assert 'json' not in user_content.lower()
+        return httpx.Response(200, json=providers.mock(payload, {'kind': 'judge', 'data': data}))
+
+    monkeypatch.setattr(providers.httpx, 'post', provider_post)
+    client = TestClient(app)
+    client.auth = ('researcher', 'test-password')
+    body = {**request_body(client, mode), 'judge_model': 'gpt-5.4-nano'}
+    created = client.post('/api/runs', json=body, headers={'Idempotency-Key': 'judge-json'})
+    assert created.status_code == 202
+    run_id = created.json()['id']
+    saver = InMemorySaver()
+    agent, offline = agent_graph(saver), offline_graph(saver)
+    process_job(claim(), agent, offline)
+    if phase == 'offline':
+        queued = client.post(f'/api/runs/{run_id}/evaluate', headers={'Idempotency-Key': 'judge-json-offline'})
+        assert queued.status_code == 202
+        process_job(claim(), agent, offline)
+    calls = client.get(f'/api/runs/{run_id}/calls?phase={phase}').json()['items']
+    assert len(calls) == len(requests) == 3
+    for call in calls:
+        ev = call['evaluations'][0]
+        assert ev['status'] == 'completed', ev['judge_result']
+        assert ev['aggregate_verdict'] == 'compliant'
+        assert ev['evidence_validation']['valid']
 
 
 def test_cancel_and_resume_unstarted_run(database):

@@ -80,6 +80,8 @@ docker compose up -d --force-recreate api worker
 
 모델은 해당 계정에서 Responses API를 지원해야 하며, runner 모델은 function calling, Judge 모델은 JSON 출력을 지원해야 합니다. 특정 모델을 자동 선택하거나 유료 검증 호출을 실행하지 않습니다. API 키는 worker에만 전달하고 업무 DB에는 저장하지 않습니다. GPT-5.4 nano의 지원 기능과 상태는 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.4-nano)에서 확인할 수 있습니다.
 
+Judge는 `text.format.type=json_object`를 사용하며, `input`의 developer 메시지에도 JSON 출력 지시를 넣습니다. `instructions`에만 JSON 지시가 있으면 공급자가 입력 검증 단계에서 HTTP 400을 반환할 수 있습니다. 이 오류가 발생했던 기존 환경은 `./start.sh`로 재빌드한 뒤 새 실행을 시작하세요. 기존 오류 기록은 보존합니다. 공급자 오류에는 상세 메시지와 문제 필드(`param`)를 함께 표시하며, 원본 응답은 호출 상세의 `response_payload`에서 확인할 수 있습니다.
+
 ### 예산
 
 Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함한 온라인 요청 수 상한입니다. Offline 평가는 별도의 동일 상한을 적용합니다. 각 요청에 입력 byte 상한과 출력 token 상한도 적용하며, 초과 시 입력을 임의로 잘라내지 않고 오류를 저장합니다. 공급자가 반환한 사용량은 요청별로 저장합니다. 금액 환산 UI는 포함하지 않으므로 실제 공급자의 과금 상한 설정도 함께 사용하세요.

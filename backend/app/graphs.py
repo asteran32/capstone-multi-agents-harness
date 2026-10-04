@@ -4,7 +4,7 @@ from typing import TypedDict
 from sqlalchemy import select
 from langgraph.graph import StateGraph, START, END
 
-from .contracts import (MODES, RUBRIC, JudgeResult, RunnerReport, canonical, digest)
+from .contracts import (MODES, RUBRIC, JUDGE_JSON_INSTRUCTION, JudgeResult, RunnerReport, canonical, digest)
 from .db import (transaction, Call, Run, Snapshot, Response, Evaluation, ToolExecution, now)
 from .evaluation import lexical, validate_judge, uncertain, execution_evidence, aggregate, metrics
 from .providers import agent_payload, normalize, ProviderError
@@ -175,8 +175,10 @@ def judge(state):
         data = {'role': call.role, 'policy': next(p for p in config['policy']['roles'] if p['role'] == call.role),
                 'task_input': snapshot.task_input, 'user_prompt': call.user_prompt,
                 'current_response': response.raw_text, 'tool_result': tool.result if tool else None}
+        # JSON mode validates input messages, so instructions alone are insufficient.
         payload = {'model': config['judge_model'], 'store': False, 'instructions': RUBRIC,
-                   'input': [{'role': 'user', 'content': canonical(data)}],
+                   'input': [{'role': 'developer', 'content': JUDGE_JSON_INSTRUCTION},
+                             {'role': 'user', 'content': canonical(data)}],
                    'max_output_tokens': config['budget']['max_output_tokens'],
                    'text': {'format': {'type': 'json_object'}}}
     try:
