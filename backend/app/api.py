@@ -2,6 +2,7 @@ import secrets
 import yaml
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -57,7 +58,8 @@ def key_required(key):
 
 def run_summary(s, run):
     calls = list(s.scalars(select(Call).where(Call.run_id == run.id)))
-    return {**record(run), 'total_calls': len(calls),
+    model_type = 'mock' if all(run.config_snapshot[k] == 'mock' for k in ('agent_model', 'judge_model')) else 'live'
+    return {**record(run), 'model_type': model_type, 'total_calls': len(calls),
             'finished_calls': sum(c.status in TERMINAL for c in calls),
             'failed_calls': sum(c.status in ('failed', 'blocked', 'unresolved') for c in calls),
             'jobs': [record(j) for j in s.scalars(select(Job).where(Job.run_id == run.id))]}
@@ -136,13 +138,18 @@ def new_run(body: RunCreate, idempotency_key: str | None = Header(default=None))
 
 @app.get('/api/runs', dependencies=[Depends(authenticate)])
 def runs(mode: str | None = None, status: str | None = None, since: datetime | None = None,
-         until: datetime | None = None, offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+         until: datetime | None = None, model_type: Literal['mock', 'live'] | None = None,
+         offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
     with transaction() as s:
         q = select(Run)
         for clause in [Run.mode == mode if mode else None, Run.status == status if status else None,
                        Run.created_at >= since if since else None, Run.created_at < until if until else None]:
             if clause is not None:
                 q = q.where(clause)
+        if model_type:
+            mock_models = ((Run.config_snapshot['agent_model'].as_string() == 'mock') &
+                           (Run.config_snapshot['judge_model'].as_string() == 'mock'))
+            q = q.where(mock_models if model_type == 'mock' else ~mock_models)
         total = s.scalar(select(func.count()).select_from(q.subquery()))
         items = [run_summary(s, r) for r in s.scalars(q.order_by(Run.created_at.desc(), Run.id).offset(offset).limit(limit))]
         return {'items': items, 'total': total}

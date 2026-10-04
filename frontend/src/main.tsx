@@ -1,13 +1,13 @@
 import React, {useState,useEffect,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {api,post} from './api';
-import {roles,names,terminal,Role,Mode,Dict,Task,Candidate,Run,Call} from './types';
+import {roles,names,terminal,Role,Mode,Dict,Task,Candidate,Run,Call,ModelType} from './types';
 import {Overview} from './Overview';
 import './style.css';
 
 const modes:Mode[]=['Base','L1','L1+L2','FULL'];
 const defaults:Record<Role,string>={problem_designer:'선택된 문제를 정답 없이 설명해줘',code_reviewer:'제공된 코드가 요구사항을 충족하는지 검토해줘',test_runner:'원본 테스트를 실행하고 결과를 JSON으로 반환해줘'};
-const labels:Record<string,string>={completed:'완료',running:'실행 중',queued:'대기',failed:'실패',cancel_requested:'취소 중',cancelled:'취소됨',unresolved:'미해결',blocked:'차단',compliant:'준수',violated:'위반',uncertain:'불확실',disabled:'비활성',pending:'평가 중',error:'오류',pass:'통과',fail:'실패',timeout:'시간 초과',not_executed:'미실행'};
+const labels:Record<string,string>={completed:'완료',running:'실행 중',queued:'대기',failed:'실패',cancel_requested:'취소 중',cancelled:'취소됨',unresolved:'미해결',blocked:'차단',compliant:'준수',violated:'위반',uncertain:'불확실',disabled:'비활성',pending:'평가 중',error:'오류',pass:'통과',fail:'실패',timeout:'시간 초과',not_executed:'미실행',mock:'Mock',live:'Live'};
 function Badge({value}:{value:string|null|undefined}) {return <span className={'badge '+(value||'none')}>{labels[value||'']||value||'미평가'}</span>}
 const percent=(n:number|null|undefined)=>n==null?'—':`${Math.round(n*100)}%`;
 const pretty=(v:unknown)=>JSON.stringify(v,null,2);
@@ -80,10 +80,39 @@ function Inspector({id,onClose}:{id:string,onClose:()=>void}) {
 }
 
 function Dashboard({onSelect}:{onSelect:(id:string)=>void}) {
- const [data,setData]=useState<{items:Run[],total:number}>({items:[],total:0}),[mode,setMode]=useState(''),[status,setStatus]=useState(''),[date,setDate]=useState(''),[offset,setOffset]=useState(0),[error,setError]=useState('');
- useEffect(()=>{const p=new URLSearchParams({offset:String(offset),limit:'20'});if(mode)p.set('mode',mode);if(status)p.set('status',status);if(date)p.set('since',new Date(date).toISOString());api<typeof data>('/runs?'+p).then(setData).catch(e=>setError(String(e)))},[mode,status,date,offset]);
- return <main className="dashboard"><div className="page-heading"><div><span className="eyebrow">EXPERIMENT ARCHIVE</span><h1>실행 기록</h1><p>저장된 입력, 응답과 판정 근거를 다시 확인하세요.</p></div><span>{data.total} runs</span></div><div className="filters"><label>모드<select value={mode} onChange={e=>{setMode(e.target.value);setOffset(0)}}><option value="">전체 모드</option>{modes.map(m=><option key={m}>{m}</option>)}</select></label><label>상태<select value={status} onChange={e=>{setStatus(e.target.value);setOffset(0)}}><option value="">전체 상태</option>{['queued','running','completed','failed','cancelled'].map(s=><option key={s} value={s}>{labels[s]}</option>)}</select></label><label>시작 날짜<input type="date" value={date} onChange={e=>{setDate(e.target.value);setOffset(0)}}/></label></div>{error&&<p className="error">{error}</p>}
- <div className="table-scroll"><table><thead><tr><th>실행</th><th>모드</th><th>모델</th><th>진행</th><th>상태</th><th></th></tr></thead><tbody>{data.items.map(r=><tr key={r.id}><td><strong>{new Date(r.created_at).toLocaleString('ko-KR')}</strong><small className="mono">{r.id.slice(0,8)} · {r.config_snapshot.source_task_id||r.config_snapshot.task_id.slice(0,8)}</small></td><td>{r.mode}</td><td>{r.config_snapshot.agent_model}</td><td>{r.finished_calls}/{r.total_calls}<small>실패·미해결 {r.failed_calls}</small></td><td><Badge value={r.status}/></td><td><button className="text-button" onClick={()=>onSelect(r.id)}>기록 열기 →</button></td></tr>)}</tbody></table></div>{!data.items.length&&<div className="empty-state"><h3>저장된 실행이 없습니다.</h3><p>실험 화면에서 첫 실행을 시작하세요.</p></div>}<div className="pagination"><button disabled={!offset} onClick={()=>setOffset(offset-20)}>← 이전</button><span>{offset+1}–{Math.min(offset+20,data.total)} / {data.total}</span><button disabled={offset+20>=data.total} onClick={()=>setOffset(offset+20)}>다음 →</button></div></main>
+ const [data,setData]=useState<{items:Run[],total:number}>({items:[],total:0}),[mode,setMode]=useState(''),[status,setStatus]=useState(''),[date,setDate]=useState(''),[modelType,setModelType]=useState<ModelType|''>(''),[offset,setOffset]=useState(0),[error,setError]=useState(''),[loading,setLoading]=useState(true);
+ useEffect(()=>{
+  let active=true;
+  const p=new URLSearchParams({offset:String(offset),limit:'20'});
+  if(mode)p.set('mode',mode);
+  if(status)p.set('status',status);
+  if(date)p.set('since',new Date(date).toISOString());
+  if(modelType)p.set('model_type',modelType);
+  setLoading(true);setError('');
+  api<typeof data>('/runs?'+p).then(result=>{if(active)setData(result)})
+   .catch(e=>{if(active){setError(String(e));setData({items:[],total:0})}})
+   .finally(()=>{if(active)setLoading(false)});
+  return()=>{active=false};
+ },[mode,status,date,modelType,offset]);
+ const filtered=!!(mode||status||date||modelType);
+ return <main className="dashboard">
+  <div className="page-heading"><div><span className="eyebrow">EXPERIMENT ARCHIVE</span><h1>실행 기록</h1><p>저장된 입력, 응답과 판정 근거를 다시 확인하세요.</p></div><span>{loading?'…':data.total} runs</span></div>
+  <div className="filters">
+   <label>모델 유형<select value={modelType} onChange={e=>{setModelType(e.target.value as ModelType|'');setOffset(0)}}><option value="">전체</option><option value="mock">Mock</option><option value="live">Live</option></select></label>
+   <label>모드<select value={mode} onChange={e=>{setMode(e.target.value);setOffset(0)}}><option value="">전체 모드</option>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
+   <label>상태<select value={status} onChange={e=>{setStatus(e.target.value);setOffset(0)}}><option value="">전체 상태</option>{['queued','running','completed','failed','cancelled'].map(s=><option key={s} value={s}>{labels[s]}</option>)}</select></label>
+   <label>시작 날짜<input type="date" value={date} onChange={e=>{setDate(e.target.value);setOffset(0)}}/></label>
+  </div>
+  <p className="muted">모델 설정 기준 · Mock: Agent·Judge 모두 Mock · Live: 하나 이상 실제 API 모델</p>
+  {error&&<p className="error" role="alert">{error}</p>}
+  <div className="table-scroll" aria-busy={loading}><table><thead><tr><th>실행</th><th>모드</th><th>유형</th><th>모델</th><th>진행</th><th>상태</th><th></th></tr></thead><tbody>{!loading&&data.items.map(r=><tr key={r.id}>
+   <td><strong>{new Date(r.created_at).toLocaleString('ko-KR')}</strong><small className="mono">{r.id.slice(0,8)} · {r.config_snapshot.source_task_id||r.config_snapshot.task_id.slice(0,8)}</small></td>
+   <td>{r.mode}</td><td><Badge value={r.model_type}/></td><td>Agent · {r.config_snapshot.agent_model}<small>Judge · {r.config_snapshot.judge_model}</small></td>
+   <td>{r.finished_calls}/{r.total_calls}<small>실패·미해결 {r.failed_calls}</small></td><td><Badge value={r.status}/></td><td><button className="text-button" onClick={()=>onSelect(r.id)}>기록 열기 →</button></td>
+  </tr>)}</tbody></table></div>
+  {loading?<div className="empty-state" role="status">실행 기록을 불러오는 중…</div>:!error&&!data.items.length&&<div className="empty-state"><h3>{filtered?'조건에 맞는 실행이 없습니다.':'저장된 실행이 없습니다.'}</h3><p>{filtered?'필터 조건을 변경해 보세요.':'실험 화면에서 첫 실행을 시작하세요.'}</p></div>}
+  <div className="pagination"><button disabled={loading||!offset} onClick={()=>setOffset(offset-20)}>← 이전</button><span>{loading?'…':`${data.items.length?offset+1:0}–${data.items.length?offset+data.items.length:0} / ${data.total}`}</span><button disabled={loading||offset+20>=data.total} onClick={()=>setOffset(offset+20)}>다음 →</button></div>
+ </main>
 }
 
 function Workspace({config,runId,onRun,onError}:{config:Dict,runId:string,onRun:(id:string)=>void,onError:(s:string)=>void}) {

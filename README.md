@@ -88,6 +88,8 @@ Judge는 `text.format.type=json_object`를 사용하며, `input`의 developer �
 
 Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함한 온라인 요청 수 상한입니다. Offline 평가는 별도의 동일 상한을 적용합니다. 각 요청에 입력 byte 상한과 출력 token 상한도 적용하며, 초과 시 입력을 임의로 잘라내지 않고 오류를 저장합니다. 공급자가 반환한 사용량은 요청별로 저장합니다. 금액 환산 UI는 포함하지 않으므로 실제 공급자의 과금 상한 설정도 함께 사용하세요.
 
+실행 기록 대시보드의 **모델 유형**에서 전체·Mock·Live를 선택할 수 있습니다. 저장된 모델 설정을 기준으로 Agent·Judge가 모두 `mock`이면 Mock, 하나 이상 실제 API 모델이면 Live입니다. Live 표시는 API 호출 성공 여부를 뜻하지 않으며, Base/L1에서 아직 사용하지 않은 Judge 설정도 포함합니다. Sandbox 설정과는 독립적입니다. 기존 기록에도 적용되며 모드·상태·날짜 필터와 함께 사용할 수 있습니다. 목록에는 유형과 Agent·Judge 모델을 함께 표시합니다. `GET /api/runs?model_type=mock` 또는 `model_type=live`로 조회하며, 필터를 적용한 전체 건수와 페이지를 반환합니다.
+
 ## 테스트와 검증 상태
 
 일반 테스트는 SQLite와 메모리 checkpointer를 **테스트 harness에서만** 사용합니다. 운영 경로는 PostgreSQL과 PostgresSaver입니다. SQLite 테스트 성공을 실제 PostgreSQL 통합 검증으로 간주하지 않습니다.

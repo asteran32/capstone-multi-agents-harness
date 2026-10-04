@@ -8,3 +8,7 @@
 
 .recovery-line{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted);padding:8px 0}
 .recovery-line>span:last-child{margin-left:auto;font-size:9px}
+
+.dashboard .filters{flex-wrap:wrap}
+.badge.live{background:#eaf3ed;color:#3f7756}
+@media(max-width:600px){.dashboard .filters label{width:calc(50% - 5px)}}
