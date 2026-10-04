@@ -1,6 +1,10 @@
 # Guardrail Lab
 
-HumanEval 문제에서 Problem designer → Code reviewer → Test runner를 순차 실행하고, 네 가지 Guardrail 모드의 출력과 판정 근거를 조회하는 최소 웹 데모입니다. [개발 명세](docs/web_guardrail_platform_development_spec_ko.md)와 [시스템 아키텍처](docs/web_guardrail_platform_system_architecture_ko.md)를 기준으로 구현했습니다.
+HumanEval 문제에서 Problem designer → Code reviewer → Test runner를 순차 실행하고, 네 가지 Guardrail 모드의 출력과 판정 근거를 조회하는 harness engineering 실험용 웹 데모입니다. [개발 명세](docs/web_guardrail_platform_development_spec_ko.md)와 [시스템 아키텍처](docs/web_guardrail_platform_system_architecture_ko.md)를 기준으로 구현했습니다.
+
+연구는 역할·도구·출력 계약 준수, 위반 탐지, 복구, 실행 신뢰성과 토큰·지연 비용에 집중합니다. HumanEval은 통제된 작업 입력이며 교육적 위험과 학습 효과는 평가 범위에서 제외합니다. 비교 조건, 독립 평가와 장애 검증 계획은 [Harness Engineering 실험 계획서](docs/web_guardrail_platform_experiment_plan_ko.md)에 정리했습니다. 이 계획의 분석 도구와 장애 fixture가 모두 구현된 것은 아닙니다.
+
+본실험은 **L1 / L1+L2 / FULL** 세 조건을 사용합니다. L1의 역할·요구사항·금지사항·출력 명세를 공통 기준선으로 두고 온라인 평가와 복구의 추가 효과를 비교합니다. Base는 앱에서 지원하지만 본실험에서는 제외합니다. L1의 저장 응답도 사후 평가하며, L1 명세 자체의 효과는 이번 비교로 추정하지 않습니다.
 
 FastAPI는 실행 접수·조회, 독립 Python worker는 LangGraph 실행을 담당합니다. PostgreSQL의 `app` schema에 실험 기록을, `checkpoint` schema에 재개 상태를 저장합니다. React 화면은 같은 FastAPI 주소에서 제공합니다. Redis, Celery, 사용자 관리, 자동 모델 선택 등 확장 기능은 포함하지 않습니다.
 
@@ -142,13 +146,14 @@ docker compose run --rm --no-deps worker python /workspace/scripts/verify_sandbo
 
 | 검사 | 결과 |
 |---|---|
-| Python 로직·API·LangGraph·worker 자동 테스트 | 24개 통과 |
-| 실제 PostgreSQL 테스트 | 실행 환경이 없어 1개 skip |
+| Python 로직·API·LangGraph·worker 자동 테스트 | 42개 통과. PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
+| 프런트엔드 토큰 집계 테스트 | 8개 통과 |
+| 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소 |
 | TypeScript 타입 검사 및 Vite production build | 통과 |
 | Python 문법 컴파일 및 Compose 설정 검사 | 통과 |
-| 실제 PostgreSQL·PostgresSaver 연결 | 미검증: 공유 메모리 생성 권한 제한 |
-| 실제 Docker sandbox·이미지 빌드 | 미검증: Docker 소켓 접근 제한 |
-| 브라우저 화면 및 실제 서버 구동 | 미검증: 로컬 포트 listen 권한 제한 |
+| 실제 PostgreSQL·PostgresSaver 연결 | 임시 PostgreSQL 통합 테스트에서 확인 |
+| Docker 앱 이미지 빌드 | 통과. 실제 sandbox 코드 실행은 이번 변경에서 재검증하지 않음 |
+| 브라우저 화면 및 실제 서버 구동 | Mock 전용 임시 환경에서 L1→L1+L2→FULL 각 30문제 완료, 새로고침·상세 이동·모바일 화면 확인 |
 | 실제 공급자 호출 | 미실행 |
 
 로직 검증에는 네 모드의 실제 payload 차이, lexical 통과/실패 모두 Judge 호출, 잘못된 인용 재시도, history 0/3/최근 5건과 실패 포함, FULL 복구 1회, runner 도구 재사용, offline의 생성 비변경, 예산 초과, 취소·재개, 업무 결과 저장 후 장애 재개를 포함합니다.
