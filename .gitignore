@@ -1,0 +1,10 @@
+.venv/
+.runtime/
+.env
+__pycache__/
+.pytest_cache/
+*.pyc
+node_modules/
+dist/
+*.egg-info/
+*.tsbuildinfo
