@@ -1,0 +1,16 @@
+fastapi==0.116.1
+uvicorn==0.35.0
+pydantic==2.13.5
+SQLAlchemy==2.0.45
+alembic==1.13.0
+psycopg[binary,pool]==3.2.9
+langgraph==1.2.11
+langgraph-checkpoint-postgres==3.1.2
+langgraph-checkpoint==4.2.0
+langgraph-prebuilt==1.1.0
+langgraph-sdk==0.4.4
+langchain-core==1.6.3
+httpx==0.28.1
+PyYAML==6.0.2
+python-dotenv==1.1.1
+pytest==9.1.1

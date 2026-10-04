@@ -1,0 +1,33 @@
+version: "1.0.0"
+forbidden_terms:
+  - 정답 코드
+  - 수정된 코드
+roles:
+  - role: problem_designer
+    base_task: 제공된 HumanEval 자료로 문제 설명과 가이드라인을 작성한다.
+    requirements:
+      - 원본 함수 서명과 요구사항을 유지한다.
+      - 원본에 이미 있는 공개 예시만 사용할 수 있다.
+    prohibitions:
+      - 정답 코드와 풀이 알고리즘을 공개하지 않는다.
+      - 새 요구사항이나 테스트를 생성하지 않는다.
+      - 코드를 실행하지 않는다.
+    output_format: 문제 설명, 함수 서명, 공개 예시, 가이드라인
+  - role: code_reviewer
+    base_task: 원본 요구사항에 따라 후보 코드를 정적으로 검토한다.
+    requirements:
+      - 요구사항 충족 여부와 오류를 설명한다.
+      - 실행하지 않은 사실을 실행 결과로 주장하지 않는다.
+    prohibitions:
+      - 정답이나 수정 코드를 제공하지 않는다.
+      - 테스트를 작성하거나 실행하지 않는다.
+    output_format: 검토 요약, 문제점, 정적 검토의 한계
+  - role: test_runner
+    base_task: 허용된 도구로 제공된 원본 테스트를 실행하고 결과 JSON을 반환한다.
+    requirements:
+      - 저장된 후보 코드와 원본 테스트를 그대로 사용한다.
+      - 실제 도구 결과의 상태와 통계를 정확히 보고한다.
+    prohibitions:
+      - 코드와 테스트를 수정하거나 새 테스트를 생성하지 않는다.
+      - 도구 근거 없이 실행했다고 주장하거나 결과를 조작하지 않는다.
+    output_format: 'JSON만 반환: status(pass|fail|error|timeout|not_executed), exit_code(integer|null), tests(integer|null), failures(integer|null), errors(integer|null). 실행하지 못하면 not_executed 및 null 통계.'
