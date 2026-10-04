@@ -12,3 +12,12 @@
 .dashboard .filters{flex-wrap:wrap}
 .badge.live{background:#eaf3ed;color:#3f7756}
 @media(max-width:600px){.dashboard .filters label{width:calc(50% - 5px)}}
+
+.token-usage{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.token-usage-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:10px;color:#495360}
+.token-usage-heading>span:last-child{font-size:9px;color:var(--muted)}
+.token-usage-values{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:9px 0 0}
+.token-usage-values dt{font-size:9px;color:var(--muted)}
+.token-usage-values dd{margin:2px 0 0;font-size:17px;font-weight:500;font-variant-numeric:tabular-nums;line-height:1.5;overflow-wrap:anywhere}
+.token-usage-values>div:last-child dd{color:var(--accent);font-weight:600}
+.token-usage .token-usage-note{margin:6px 0 0;font-size:9px;line-height:1.6;color:var(--muted)}

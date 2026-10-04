@@ -1,7 +1,8 @@
 import React, {useState,useEffect,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {api,post} from './api';
-import {roles,names,terminal,Role,Mode,Dict,Task,Candidate,Run,Call,ModelType} from './types';
+import {roles,names,terminal,Role,Mode,Dict,Task,Candidate,Run,Call,ModelRequest,EvaluationPhase,ModelType} from './types';
+import {TokenUsage} from './TokenUsageDisplay';
 import {Overview} from './Overview';
 import './style.css';
 
@@ -44,20 +45,22 @@ function Setup({config,onStart,onError}:{config:Dict,onStart:(id:string)=>void,o
  </form></aside>
 }
 
-function Metrics({ev,initial}:{ev:Dict|undefined,initial?:Dict}) {
- if(!ev)return <div className="metrics empty-metrics"><span className="eyebrow">ASSESSMENT</span><p>응답 평가를 기다립니다.</p></div>;
+function Metrics({ev,initial,requests,phase}:{ev:Dict|undefined,initial?:Dict,requests?:ModelRequest[],phase:EvaluationPhase}) {
+ const tokens=<TokenUsage requests={requests} phase={phase} judgeDisabled={ev?.status==='disabled'}/>;
+ if(!ev)return <div className={'metrics'+(requests?.length?'':' empty-metrics')}><span className="eyebrow">ASSESSMENT</span><p className="muted">응답 평가를 기다립니다.</p>{tokens}</div>;
  const m=ev.metric_snapshot||initial?.metric_snapshot;
  return <div className="metrics"><div className="metric-heading"><span className="eyebrow">{ev.phase==='offline'?'OFFLINE':'ONLINE'} · M3</span><Badge value={ev.status==='disabled'?'disabled':ev.aggregate_verdict}/></div>
- {ev.status==='disabled'?<p className="muted">이 모드의 온라인 평가는 비활성입니다. 종료 후 저장된 출력을 평가할 수 있습니다.</p>:<>
+ {ev.status==='disabled'?<><p className="muted">이 모드의 온라인 평가는 비활성입니다. 종료 후 저장된 출력을 평가할 수 있습니다.</p>{tokens}</>:<>
  <div className="metric-line"><span>Lexical · M2</span><span>{ev.lexical_result?.match_count??'—'} matches</span><Badge value={ev.lexical_result?.verdict}/></div>
  {['INFO','SCOPE','EXEC'].map(k=><details className="rule" key={k}><summary><span>{k}{k==='INFO'?' · M1':''}</span><Badge value={ev.judge_result?.[k]?.verdict}/></summary><p>{ev.judge_result?.[k]?.reason||'평가 중'}</p>{ev.judge_result?.[k]?.evidence&&<blockquote>{ev.judge_result[k].evidence}</blockquote>}</details>)}
  <div className="metric-numbers" title="최초 응답 기준 최근 창"><div><small>위반율 · M4</small><strong>{percent(m?.role_violation_rate)}</strong></div><div><small>Decision coverage</small><strong>{percent(m?.decision_coverage)}</strong></div></div>
+ {tokens}
  <p className="window-note">{m?`최근 ${m.window_count}/5회 · V ${m.V} / C ${m.C} / U ${m.U}${m.warmup?' · Warmup':''}`:'복구 응답은 최근 창에 추가하지 않습니다.'}</p>
  <p className="window-note">인용 근거 {ev.evidence_validation?.valid?'검증 완료':ev.evidence_validation?'검증 실패':'검증 대기'}{ev.execution_evidence?.applicable!==false&&ev.execution_evidence?.verdict?' · 실행 보고 '+(labels[ev.execution_evidence.verdict]||ev.execution_evidence.verdict):''}</p>{ev.status==='error'&&<p className="error">Judge 오류 · 근거 검증 기록을 확인하세요.</p>}
  </>}</div>
 }
 
-function AgentRow({role,index,call,phase,onInspect}:{role:Role,index:number,call:Call|undefined,phase:string,onInspect:(id:string)=>void}) {
+function AgentRow({role,index,call,phase,onInspect}:{role:Role,index:number,call:Call|undefined,phase:EvaluationPhase,onInspect:(id:string)=>void}) {
  const [version,setVersion]=useState(0);
  useEffect(()=>setVersion(0),[call?.id]);
  const response=call?.responses?.find(r=>r.response_version===version),ev=call?.evaluations.find(e=>e.phase===phase&&e.response_id===response?.id);
@@ -67,7 +70,7 @@ function AgentRow({role,index,call,phase,onInspect}:{role:Role,index:number,call
  {response?<pre className="response-text">{response.raw_text}</pre>:<div className="output-placeholder"><span className={call?.status==='running'?'working':''}>↳</span><p>{call?.status==='running'?'응답을 생성하고 있습니다.':'실행 결과가 여기에 표시됩니다.'}</p></div>}
  {recovery&&<div className="recovery-line"><span>최초</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)?.aggregate_verdict}/><span>→ 복구</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===1)?.id)?.aggregate_verdict}/><span>지표는 최초 응답 기준</span></div>}{call?.error&&<p className="error">{call.error.message||call.error.code}</p>}
  <div className="output-footer"><span>History {original?.ordered_history?.length??0}/5{recovery?' → 0 (reset)':''}</span>{call?.tools?.[0]?.result&&<span>코드 테스트 <Badge value={call.tools[0].result.status}/></span>}{call&&<button className="text-button" onClick={()=>onInspect(call.id)}>상세 기록 ↗</button>}</div>
- </div><Metrics ev={ev} initial={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)}/></section>
+ </div><Metrics ev={ev} initial={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)} requests={call?.requests} phase={phase}/></section>
 }
 
 function Inspector({id,onClose}:{id:string,onClose:()=>void}) {
@@ -116,7 +119,7 @@ function Dashboard({onSelect}:{onSelect:(id:string)=>void}) {
 }
 
 function Workspace({config,runId,onRun,onError}:{config:Dict,runId:string,onRun:(id:string)=>void,onError:(s:string)=>void}) {
- const [run,setRun]=useState<Run|null>(null),[calls,setCalls]=useState<Call[]>([]),[round,setRound]=useState(1),[phase,setPhase]=useState('online'),[inspected,setInspected]=useState(''),[allCalls,setAllCalls]=useState<Call[]>([]),[roleFilter,setRoleFilter]=useState(''),[verdictFilter,setVerdictFilter]=useState(''),[pollToken,setPollToken]=useState(0);
+ const [run,setRun]=useState<Run|null>(null),[calls,setCalls]=useState<Call[]>([]),[round,setRound]=useState(1),[phase,setPhase]=useState<EvaluationPhase>('online'),[inspected,setInspected]=useState(''),[allCalls,setAllCalls]=useState<Call[]>([]),[roleFilter,setRoleFilter]=useState(''),[verdictFilter,setVerdictFilter]=useState(''),[pollToken,setPollToken]=useState(0);
  const refresh=useCallback(async()=>{if(!runId)return;const [r,c]=await Promise.all([api<Run>(`/runs/${runId}`),api<{items:Call[]}>(`/runs/${runId}/calls?phase=${phase}`)]);setRun(r);setAllCalls(c.items);const selected=c.items.filter(x=>x.round_index===round);setCalls(await Promise.all(selected.map(x=>api<Call>(`/calls/${x.id}`))));return r},[runId,round,phase]);
  useEffect(()=>{let active=true;let timer:ReturnType<typeof setTimeout>;const tick=async()=>{try{const r=await refresh();if(active&&r&&(!terminal.includes(r.status)||r.jobs.some(j=>['queued','running'].includes(j.status))))timer=setTimeout(tick,1500)}catch(e){if(active)onError(String(e))}};tick();return()=>{active=false;clearTimeout(timer)}},[refresh,pollToken]);
  useEffect(()=>{setRound(1);setRun(null);setCalls([]);setAllCalls([]);setPhase('online')},[runId]);

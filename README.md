@@ -86,7 +86,11 @@ Judge는 `text.format.type=json_object`를 사용하며, `input`의 developer �
 
 ### 예산
 
-Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함한 온라인 요청 수 상한입니다. Offline 평가는 별도의 동일 상한을 적용합니다. 각 요청에 입력 byte 상한과 출력 token 상한도 적용하며, 초과 시 입력을 임의로 잘라내지 않고 오류를 저장합니다. 공급자가 반환한 사용량은 요청별로 저장합니다. 금액 환산 UI는 포함하지 않으므로 실제 공급자의 과금 상한 설정도 함께 사용하세요.
+Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함한 온라인 요청 수 상한입니다. Offline 평가는 별도의 동일 상한을 적용합니다. 각 요청에 입력 byte 상한과 출력 token 상한도 적용하며, 초과 시 입력을 임의로 잘라내지 않고 오류를 저장합니다. 공급자가 반환한 사용량은 요청별로 저장합니다.
+
+각 역할의 위반율·Decision coverage 아래에서 현재 Round의 Agent 입력·출력·합계 토큰을 확인할 수 있습니다. 최초·도구 후속·복구·사용량이 보고된 재시도를 합산하며 Judge 평가 요청은 제외합니다. 그 아래 **LLM Judge 토큰 사용량**은 선택한 Online/Offline 단계의 최초·복구 평가와 재시도를 합산합니다. 최초/복구 탭을 바꾸어도 각 합계는 같으며, Online/Offline 탭을 바꾸면 Judge 사용량만 해당 평가 단계에 맞춰 바뀝니다. Mock은 0, 사용량이 없는 요청은 `—` 또는 일부 미집계 안내로 구분하고, 비활성 Judge에는 `평가 비활성`을 표시합니다. 기존 실행 기록도 저장된 사용량을 표시합니다. 금액 환산 UI는 포함하지 않으므로 실제 공급자의 과금 상한 설정도 함께 사용하세요.
+
+Round는 세 Agent를 순서대로 한 번씩 실행하는 반복 단위입니다. Online은 응답 생성 과정의 평가로, L1+L2·FULL에서 Judge를 호출합니다. Offline은 Base·L1 실행 종료 후 저장된 출력을 평가하는 기능으로, Agent 생성이나 테스트 도구 실행을 반복하지 않고 Judge API만 호출합니다.
 
 실행 기록 대시보드의 **모델 유형**에서 전체·Mock·Live를 선택할 수 있습니다. 저장된 모델 설정을 기준으로 Agent·Judge가 모두 `mock`이면 Mock, 하나 이상 실제 API 모델이면 Live입니다. Live 표시는 API 호출 성공 여부를 뜻하지 않으며, Base/L1에서 아직 사용하지 않은 Judge 설정도 포함합니다. Sandbox 설정과는 독립적입니다. 기존 기록에도 적용되며 모드·상태·날짜 필터와 함께 사용할 수 있습니다. 목록에는 유형과 Agent·Judge 모델을 함께 표시합니다. `GET /api/runs?model_type=mock` 또는 `model_type=live`로 조회하며, 필터를 적용한 전체 건수와 페이지를 반환합니다.
 
@@ -97,6 +101,9 @@ Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함
 ```sh
 # 모델 비용 없이 로직·API·worker 테스트
 make test
+
+# Node.js 22: 토큰 집계 테스트
+npm --prefix frontend test
 
 # 실제 PostgreSQL migration 및 재개 검사
 # 임시 guardrail_test_* DB를 생성·검증·삭제합니다. 업무 DB는 삭제하지 않습니다.
