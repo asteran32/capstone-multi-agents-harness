@@ -81,7 +81,7 @@ def parse_policy(raw: str):
 
 
 class Budget(Strict):
-    max_requests: int = Field(default=120, ge=1, le=2000)
+    max_requests: int = Field(default=10, ge=1, le=2000)
     max_input_bytes: int = Field(default=60000, ge=1000, le=200000)
     max_output_tokens: int = Field(default=1500, ge=128, le=4096)
 
