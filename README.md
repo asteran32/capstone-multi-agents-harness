@@ -18,7 +18,9 @@ Docker Desktop 또는 Docker Engine과 Compose가 필요합니다. Docker를 켠
 
 `start.sh`는 테스트 실행 이미지와 프런트엔드·백엔드를 빌드하고 PostgreSQL, migration·seed, API, worker, sandbox executor를 시작합니다. 프런트엔드는 API에서 함께 제공하므로 별도 프런트엔드 실행 명령이 필요하지 않습니다. 기존 `python3 scripts/configure.py`(최초 1회)와 `make up` 방식도 사용할 수 있습니다.
 
-화면에서 문제·후보·모드를 고른 뒤 **새 실행 시작**을 누르세요. 기본 모델은 `mock`, 기본 모드는 `L1+L2`입니다.
+로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
+
+**실험 열기** 또는 상단 **실험** 메뉴에서 문제·후보·모드를 고른 뒤 **새 실행 시작**을 누르세요. 기본 모델은 `mock`, 기본 모드는 `L1+L2`입니다.
 
 ```sh
 # 상태와 로그
@@ -43,7 +45,7 @@ make down
 | 지표 | 최초 응답 기준 최근 5회 M1~M4, V/C/U, coverage, warmup, null 및 disabled 구분 |
 | 사후 평가 | 종료된 Base/L1 출력만 offline 평가, 생성·도구·복구 실행 없음 |
 | 기록 | 실제 API payload, 모든 Judge 시도, 인용 검증, 도구 결과, 노드 로그 및 상세 조회 |
-| 웹 | 설정 패널, 세로 3개 역할 출력과 우측 평가, 최초·복구 전환, run 및 call 필터 |
+| 웹 | Overview 개요·목적·아키텍처 그래프, 설정 패널, 세로 3개 역할 출력과 우측 평가, 최초·복구 전환, run 및 call 필터 |
 | 정책 | YAML/JSON 가져오기·편집·검증·파일 저장, 실행별 원문·설정·버전·해시 고정 |
 | 안정성 | 생성 멱등성, DB 작업 큐·lease·heartbeat, 단일 worker 잠금, 고유키 및 저장 결과 재사용 |
 
