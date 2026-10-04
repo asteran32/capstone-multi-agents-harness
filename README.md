@@ -18,7 +18,7 @@ Docker Desktop 또는 Docker Engine과 Compose가 필요합니다. Docker를 켠
 
 `start.sh`는 테스트 실행 이미지와 프런트엔드·백엔드를 빌드하고 PostgreSQL, migration·seed, API, worker, sandbox executor를 시작합니다. 프런트엔드는 API에서 함께 제공하므로 별도 프런트엔드 실행 명령이 필요하지 않습니다. 기존 `python3 scripts/configure.py`(최초 1회)와 `make up` 방식도 사용할 수 있습니다.
 
-로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
+로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → 실험 → 일괄 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
 
 **실험 열기** 또는 상단 **실험** 메뉴에서 문제·후보·모드를 고른 뒤 **새 실행 시작**을 누르세요. 기본 모델은 `mock`, 기본 모드는 `L1+L2`입니다.
 
@@ -54,6 +54,31 @@ make down
 기존 3문제 환경도 `./start.sh`를 다시 실행하면 이미지를 빌드하고 migration·seed 단계에서 새 문제를 추가합니다. 문제 원본은 `app.tasks`, 후보 코드는 `app.candidates`에 저장됩니다. 이미 등록된 문제는 건너뛰므로 재실행해도 중복되지 않으며 기존 실행 기록을 유지합니다.
 
 ## Mock과 실제 실행
+
+### 정답 후보 30문제 일괄 실험
+
+상단 **일괄 실험**에서 HumanEval/0~29의 정답 후보를 번호순으로 실행할 수 있습니다. 기본 모드는 **L1**, 모델은 **Mock**, 문제당 1 Round입니다. 실제 실험에서는 Agent·Judge 모델을 직접 선택합니다.
+
+1. 모드, 문제당 Round, 모델, Run당 요청 한도와 공통 정책·요청을 설정합니다.
+2. **30문제 일괄 실행 시작**을 누르면 30개의 독립 Run을 한 번에 접수합니다. L1은 기본적으로 각 Run의 생성 후 사후 평가까지 끝내고 다음 문제로 넘어갑니다.
+3. 진행 화면에서 문제별 생성·평가 상태와 오류를 확인하고 **기록 열기**로 기존 상세 화면을 봅니다. `?batch=ID` 주소나 일괄 실행 기록에서 다시 열 수 있습니다.
+4. **같은 구성으로 다시 실행**에서 L1+L2 또는 FULL을 선택하면, 문제·후보·모델·정책·요청·Round·예산을 유지한 새 일괄 실험이 만들어집니다. 기존 기록은 보존합니다.
+
+실행 순서는 서버 DB에 저장되므로 브라우저를 닫아도 계속됩니다. 기존 단일 worker가 처리하며, 한 문제에서 오류가 발생하면 기록한 뒤 다음 문제로 진행합니다. **남은 실행 취소**는 대기 작업을 취소하고 진행 중인 모델·도구 요청이 반환된 다음 중지합니다. 취소한 일괄 실행은 새 실행으로 다시 시작합니다. 동일 접수 요청의 재전송은 같은 idempotency key를 사용하는 경우 중복 Run을 만들지 않습니다.
+
+각 문제는 별도 이력으로 시작합니다. 이 기능은 정답 30문제의 순차 실행이며, 하나의 이력을 공유하면서 5번째마다 오답으로 바꾸는 혼합 시퀀스는 지원하지 않습니다. 정답 후보가 누락되거나 중복된 문제가 있으면 일부만 접수하지 않고 전체 요청을 거부합니다. 모드 변경 재실행 시 원본 문제·후보 해시가 바뀌었어도 요청을 거부합니다.
+
+1 Round 기준으로 L1은 생성 120회와 선택적인 사후 평가 90회, L1+L2/FULL은 기본 210회 요청입니다. 복구·재시도는 추가됩니다. UI의 요청 한도는 **각 Run**에 적용되며, L1 사후 평가는 같은 크기의 별도 한도를 사용합니다. 기본 한도는 Run당 1,000회입니다.
+
+| API | 기능 |
+|---|---|
+| `POST /api/batches` | 정답 30문제 접수. `mode`, `rounds`, `agent_model`, `judge_model`, `prompts_by_role`, `budget`, `policy_raw`, `evaluate_l1` 사용 |
+| `GET /api/batches` | 일괄 실행 목록·진행 상태, offset/limit 지원 |
+| `GET /api/batches/{id}` | 고정 manifest와 문제별 Run·사후 평가 상태 |
+| `POST /api/batches/{id}/rerun` | `{"mode":"L1+L2"}` 등으로 모드만 바꿔 새 일괄 실행 접수 |
+| `POST /api/batches/{id}/cancel` | 진행 중·대기 작업 취소 |
+
+생성·재실행 API는 `Idempotency-Key`가 필요하며 기존과 같은 인증을 사용합니다. `0002` migration이 `app.batches`를 추가합니다. 기존 환경은 `./start.sh`로 새 코드·화면과 migration을 반영하세요. 이 기능 추가만으로 실제 모델 실험을 자동 실행하지는 않습니다.
 
 ### Mock 모델
 
@@ -166,7 +191,8 @@ backend/app/
   providers.py    mock 및 OpenAI adapter
   evaluation.py   lexical·인용·실행 근거·지표 계산
   worker.py       PostgreSQL queue, lease, checkpoint 재개
-  db.py           11개 업무 테이블
+  db.py           12개 업무 테이블
+  batches.py      정답 30문제 manifest, 순차 접수, 진행 집계·취소
 sandbox/          executor와 격리된 pytest wrapper
 frontend/src/     실행 화면과 대시보드
 data/             원본 30문제(0~29), 출처 해시, 라이선스

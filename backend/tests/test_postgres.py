@@ -25,6 +25,12 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     # Settings is intentionally frozen in production; tests replace its DB target only.
     monkeypatch.setitem(settings.__dict__, 'database_url', url)
     command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')),'head')
+    # Also exercise upgrading an existing 0001 installation, whose metadata
+    # predates the batches table. All changes are in the disposable test DB.
+    db.Batch.__table__.drop(engine)
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE alembic_version SET version_num='0001'"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')),'head')
     seed()
     with db.transaction() as s:
         task=s.scalar(select(db.Task))
@@ -54,4 +60,30 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
         assert s.scalar(select(func.count()).select_from(db.Response))==2
         assert s.scalar(select(func.count()).select_from(db.Evaluation))==2
         assert s.scalar(text('SELECT count(*) FROM checkpoint.checkpoints'))>0
+    # Validate JSONB dependency matching against real PostgreSQL, including
+    # L1 generation -> offline evaluation -> next problem and cancellation.
+    from app.contracts import BatchCreate
+    from app.batches import create_batch, batch_summary, cancel_batch
+    from app.worker import claim, process_job
+    with db.transaction() as s:
+        # The earlier checkpoint test left a queued job; exclude it here.
+        for job in s.scalars(select(db.Job)):
+            job.status = 'completed'
+        batch = create_batch(s, BatchCreate(prompts_by_role={r:'perform assigned task' for r in ROLES}), 'pg-batch')
+        batch_id = batch.id
+        manifest = batch.manifest
+    with postgres_checkpointer() as saver:
+        agent, offline = graphs.agent_graph(saver), graphs.offline_graph(saver)
+        for index, kind in [(0, 'run'), (0, 'offline'), (1, 'run')]:
+            job_id = claim()
+            with db.transaction() as s:
+                job = s.get(db.Job, job_id)
+                assert job.run_id == manifest[index]['run_id'] and job.job_type == kind
+            assert claim() is None
+            process_job(job_id, agent, offline)
+        with db.transaction() as s:
+            batch = s.get(db.Batch, batch_id)
+            assert batch_summary(s, batch)['finished_runs'] == 1
+            cancel_batch(s, batch)
+    assert claim() is None
     engine.dispose()

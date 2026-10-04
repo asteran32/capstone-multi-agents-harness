@@ -14,10 +14,11 @@ from sqlalchemy import select, func, text
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
-from .contracts import RunCreate, parse_policy, digest, ROLES, TERMINAL
-from .db import (transaction, record, Run, Call, Task, Candidate, Job, Snapshot,
+from .contracts import RunCreate, BatchCreate, BatchRerun, parse_policy, digest, ROLES, TERMINAL
+from .db import (transaction, record, Batch, Run, Call, Task, Candidate, Job, Snapshot,
                  Response, Evaluation, ModelRequest, ToolExecution, Log, now)
 from .services import create_run, Conflict, DEFAULT_POLICY
+from .batches import create_batch, batch_summary, cancel_batch
 
 app = FastAPI(title='Guardrail Lab', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None)
 basic = HTTPBasic(auto_error=False)
@@ -155,6 +156,65 @@ def runs(mode: str | None = None, status: str | None = None, since: datetime | N
         return {'items': items, 'total': total}
 
 
+def submit_batch(body, key, source_id=None):
+    key = key_required(key)
+    try:
+        with transaction() as s:
+            source = require(s, Batch, source_id) if source_id else None
+            if source:
+                body = BatchCreate(**{**source.config_snapshot, 'mode': body.mode})
+            batch = create_batch(s, body, key, source)
+            return batch_summary(s, batch, detail=True)
+    except Conflict as exc:
+        raise HTTPException(409, str(exc))
+    except (ValueError, yaml.YAMLError) as exc:
+        raise HTTPException(422, str(exc))
+    except IntegrityError:
+        request_hash = digest({'settings': body.model_dump(mode='json'),
+                               'source_batch_id': str(source_id) if source_id else None})
+        with transaction() as s:
+            existing = s.scalar(select(Batch).where(Batch.idempotency_key == key))
+            if existing and existing.creation_request_sha256 == request_hash:
+                return batch_summary(s, existing, detail=True)
+        raise HTTPException(409, '중복 일괄 실행 요청 또는 데이터 충돌')
+
+
+@app.post('/api/batches', status_code=202, dependencies=[Depends(authenticate)])
+def new_batch(body: BatchCreate, idempotency_key: str | None = Header(default=None)):
+    return submit_batch(body, idempotency_key)
+
+
+@app.get('/api/batches', dependencies=[Depends(authenticate)])
+def batches(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
+    with transaction() as s:
+        total = s.scalar(select(func.count()).select_from(Batch))
+        rows = list(s.scalars(select(Batch).order_by(Batch.created_at.desc(), Batch.id).offset(offset).limit(limit)))
+        return {'items': [batch_summary(s, b) for b in rows], 'total': total}
+
+
+@app.get('/api/batches/{id}', dependencies=[Depends(authenticate)])
+def batch_detail(id: UUID):
+    with transaction() as s:
+        return batch_summary(s, require(s, Batch, id), detail=True)
+
+
+@app.post('/api/batches/{id}/rerun', status_code=202, dependencies=[Depends(authenticate)])
+def rerun_batch(id: UUID, body: BatchRerun, idempotency_key: str | None = Header(default=None)):
+    return submit_batch(body, idempotency_key, id)
+
+
+@app.post('/api/batches/{id}/cancel', dependencies=[Depends(authenticate)])
+def stop_batch(id: UUID):
+    with transaction() as s:
+        batch = s.scalar(select(Batch).where(Batch.id == str(id)).with_for_update())
+        if not batch:
+            raise HTTPException(404, '기록을 찾을 수 없습니다.')
+        state = batch_summary(s, batch)
+        if state['status'] in ('queued', 'running', 'cancel_requested'):
+            cancel_batch(s, batch)
+        return batch_summary(s, batch, detail=True)
+
+
 @app.get('/api/runs/{id}', dependencies=[Depends(authenticate)])
 def run_detail(id: UUID):
     with transaction() as s:
@@ -213,6 +273,9 @@ def cancel(id: UUID):
 def resume(id: UUID):
     with transaction() as s:
         run = require(s, Run, id)
+        batch_id = run.config_snapshot.get('batch_id')
+        if batch_id and s.get(Batch, batch_id).cancel_requested:
+            raise HTTPException(409, '취소된 일괄 실행입니다. 같은 구성으로 새 일괄 실행을 시작하세요.')
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run').with_for_update())
         if run.status not in ('failed', 'cancelled'):
             raise HTTPException(409, '실패하거나 취소된 실행만 재개할 수 있습니다.')

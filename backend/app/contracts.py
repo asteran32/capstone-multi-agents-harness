@@ -86,9 +86,7 @@ class Budget(Strict):
     max_output_tokens: int = Field(default=1500, ge=128, le=4096)
 
 
-class RunCreate(Strict):
-    task_id: UUID
-    candidate_id: UUID
+class ExecutionSettings(Strict):
     mode: Literal['Base', 'L1', 'L1+L2', 'FULL'] = 'L1+L2'
     rounds: int = Field(default=1, ge=1, le=20)
     history_limit: Literal[5] = 5
@@ -105,6 +103,21 @@ class RunCreate(Strict):
         if set(prompts) != set(ROLES) or any(not s.strip() or len(s) > 10000 for s in prompts.values()):
             raise ValueError('각 역할의 요청을 1~10000자로 입력하세요.')
         return prompts
+
+
+class RunCreate(ExecutionSettings):
+    task_id: UUID
+    candidate_id: UUID
+
+
+class BatchCreate(ExecutionSettings):
+    mode: Literal['L1', 'L1+L2', 'FULL'] = 'L1'
+    budget: Budget = Field(default_factory=lambda: Budget(max_requests=1000))
+    evaluate_l1: bool = True
+
+
+class BatchRerun(Strict):
+    mode: Literal['L1', 'L1+L2', 'FULL']
 
 
 class Rule(Strict):

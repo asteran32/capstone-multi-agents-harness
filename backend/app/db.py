@@ -43,6 +43,16 @@ class Candidate(Base):
     private_label: Mapped[str] = mapped_column(Text)
 
 
+class Batch(Base):
+    __tablename__ = 'batches'
+    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
+    creation_request_sha256: Mapped[str] = mapped_column(String(64))
+    config_snapshot: Mapped[dict] = mapped_column(J)
+    manifest: Mapped[list] = mapped_column(J)
+    source_batch_id: Mapped[str | None] = mapped_column(ForeignKey('app.batches.id'), nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(default=False)
+
+
 class Run(Base):
     __tablename__ = 'runs'
     idempotency_key: Mapped[str] = mapped_column(Text, unique=True)

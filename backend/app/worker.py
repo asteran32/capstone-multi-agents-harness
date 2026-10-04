@@ -9,7 +9,8 @@ from datetime import timedelta
 from uuid import uuid4
 
 from sqlalchemy import select, or_, text
-from .db import transaction, engine, Job, Run, Call, Response, Snapshot, Evaluation, now
+from sqlalchemy.orm import aliased
+from .db import transaction, engine, Batch, Job, Run, Call, Response, Snapshot, Evaluation, now
 from .contracts import TERMINAL
 from .graphs import agent_graph, offline_graph
 from .runtime import Cancelled, ToolDenied, ToolUnknown, BudgetExceeded
@@ -23,9 +24,14 @@ OWNER = f'{socket.gethostname()}:{os.getpid()}:{uuid4()}'
 
 def claim():
     with transaction() as s:
+        dependency = aliased(Job)
+        dependency_key = Job.payload['depends_on_key'].as_string()
+        ready = or_(dependency_key.is_(None), select(dependency.id).where(
+            dependency.job_key == dependency_key,
+            dependency.status.in_(['completed', 'failed', 'cancelled'])).exists())
         job = s.scalar(select(Job).where(or_(Job.status == 'queued',
                        (Job.status == 'running') & (Job.lease_expires_at < now())))
-                       .order_by(Job.created_at).with_for_update(skip_locked=True).limit(1))
+                       .where(ready).order_by(Job.created_at, Job.id).with_for_update(skip_locked=True).limit(1))
         if not job:
             return None
         job.status, job.lease_owner = 'running', OWNER
@@ -72,7 +78,7 @@ def process_job(job_id, agent, offline):
     with transaction() as s:
         job = s.get(Job, job_id)
         run = s.get(Run, job.run_id)
-        run_id, job_type = run.id, job.job_type
+        run_id, job_type, batch_id = run.id, job.job_type, job.payload.get('batch_id')
         if job_type == 'run' and run.status != 'cancel_requested':
             run.status, run.error = 'running', None
         call_ids = list(s.scalars(select(Call.id).where(Call.run_id == run.id).order_by(Call.call_seq)))
@@ -80,12 +86,16 @@ def process_job(job_id, agent, offline):
         def verify_lease():
             if lost.is_set():
                 raise RuntimeError('Worker lease lost')
+            if batch_id:
+                with transaction() as s:
+                    if s.get(Batch, batch_id).cancel_requested:
+                        raise Cancelled('일괄 실행 취소 요청')
         runtime.lease_check = verify_lease
         try:
+            verify_lease()
             if job_type == 'run':
                 for call_id in call_ids:
-                    if lost.is_set():
-                        raise RuntimeError('Worker lease lost')
+                    verify_lease()
                     with transaction() as s:
                         call, run = s.get(Call, call_id), s.get(Run, run_id)
                         if run.status == 'cancel_requested':
@@ -115,8 +125,7 @@ def process_job(job_id, agent, offline):
                                  .where(Call.run_id == run_id).order_by(Call.call_seq, Response.response_version)))
                     ids = [item.id for item in items]
                 for response_id in ids:
-                    if lost.is_set():
-                        raise RuntimeError('Worker lease lost')
+                    verify_lease()
                     with transaction() as s:
                         response = s.get(Response, response_id)
                         call = s.get(Call, response.call_id)
@@ -132,6 +141,7 @@ def process_job(job_id, agent, offline):
                                  'response_id': response.id, 'response_version': response.response_version,
                                  'input_snapshot_id': snapshot.id, 'phase': 'offline', 'judge_attempt': 0}
                     invoke_or_resume(offline, state, f'offline:{response_id}:{version}')
+            verify_lease()
             with transaction() as s:
                 job = s.get(Job, job_id)
                 if job.lease_owner != OWNER or lost.is_set():
@@ -147,9 +157,12 @@ def process_job(job_id, agent, offline):
         except Cancelled:
             with transaction() as s:
                 run, job = s.get(Run, run_id), s.get(Job, job_id)
-                run.status, run.finished_at, job.status = 'cancelled', now(), 'cancelled'
-                for call in s.scalars(select(Call).where(Call.run_id == run_id, Call.status == 'queued')):
-                    call.status, call.finished_at = 'cancelled', now()
+                job.status, job.lease_expires_at = 'cancelled', None
+                if job_type == 'run':
+                    run.status, run.finished_at = 'cancelled', now()
+                    for call in s.scalars(select(Call).where(Call.run_id == run_id,
+                                                           Call.status.in_(['queued', 'running']))):
+                        call.status, call.finished_at = 'cancelled', now()
         except Exception as exc:
             with transaction() as s:
                 job = s.get(Job, job_id)

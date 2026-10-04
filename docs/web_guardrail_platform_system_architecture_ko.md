@@ -212,7 +212,7 @@ warmup = window_count < 5
 
 ## 데이터 아키텍처
 
-명세의 11개 업무 테이블을 유지한다. JSONB 상세 구조에도 Pydantic schema_version을 적용하고, UUID와 UTC timestamptz를 사용한다.
+기존 11개 업무 테이블에 정답 일괄 실행용 `batches`를 추가해 12개를 사용한다. `batches`는 idempotency key, 고정 설정·30문제 manifest, 원본 batch ID와 취소 상태를 저장한다. 각 Run의 config_snapshot에는 batch ID·순번을, Job payload에는 batch ID·선행 job key를 저장한다. Worker는 선행 작업이 종료된 Job만 claim하여 생성→선택적 L1 사후 평가→다음 문제 순서를 보존한다. 오류를 기록한 다음 나머지 문제를 처리하며 문제 간 history는 공유하지 않는다. JSONB 상세 구조에도 Pydantic schema_version을 적용하고, UUID와 UTC timestamptz를 사용한다.
 
 ```mermaid
 erDiagram
