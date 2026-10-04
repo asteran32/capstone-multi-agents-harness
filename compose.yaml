@@ -1,0 +1,87 @@
+name: guardrail-lab
+x-app: &app
+  image: guardrail-app:local
+  build: .
+  init: true
+  restart: unless-stopped
+x-db-env: &db-env
+  DATABASE_URL: postgresql+psycopg://guardrail:${POSTGRES_PASSWORD:?Run scripts/configure.py first}@postgres:5432/guardrail
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: guardrail
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/configure.py first}
+      POSTGRES_DB: guardrail
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U guardrail -d guardrail]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    restart: "no"
+    environment: *db-env
+    command: [sh, -c, "alembic upgrade head && python -m app.seed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    <<: *app
+    environment:
+      <<: *db-env
+      APP_USERNAME: ${APP_USERNAME:-researcher}
+      APP_PASSWORD: ${APP_PASSWORD:?Run scripts/configure.py first}
+      OPENAI_MODELS: ${OPENAI_MODELS:-}
+      SANDBOX_MODE: ${SANDBOX_MODE:-docker}
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  worker:
+    <<: *app
+    command: [python, -m, app.worker]
+    environment:
+      <<: *db-env
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODELS: ${OPENAI_MODELS:-}
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?Run scripts/configure.py first}
+      SANDBOX_URL: http://sandbox:8090
+      SANDBOX_MODE: ${SANDBOX_MODE:-docker}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      sandbox:
+        condition: service_started
+  sandbox:
+    build:
+      context: sandbox
+      dockerfile: Dockerfile.executor
+    environment:
+      SANDBOX_TOKEN: ${SANDBOX_TOKEN:?Run scripts/configure.py first}
+      SANDBOX_IMAGE: guardrail-sandbox:local
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - sandbox-journal:/journal
+    restart: unless-stopped
+  sandbox-image:
+    image: guardrail-sandbox:local
+    build: sandbox
+    profiles: [build]
+    command: ["true"]
+  test:
+    <<: *app
+    restart: "no"
+    profiles: [test]
+    command: [python, -m, pytest, tests, -q]
+    environment:
+      DATABASE_URL: sqlite://
+      APP_PASSWORD: test-password
+      SANDBOX_MODE: mock
+volumes:
+  postgres-data:
+  sandbox-journal:
