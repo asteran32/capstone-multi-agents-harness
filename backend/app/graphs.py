@@ -6,7 +6,8 @@ from langgraph.graph import StateGraph, START, END
 
 from .contracts import (MODES, RUBRIC, JUDGE_JSON_INSTRUCTION, JudgeResult, RunnerReport, canonical, digest)
 from .db import (transaction, Call, Run, Snapshot, Response, Evaluation, ToolExecution, now)
-from .evaluation import lexical, validate_judge, uncertain, execution_evidence, aggregate, metrics
+from .evaluation import lexical, check_judge, uncertain, execution_evidence, aggregate, metrics
+from .evaluation_v2 import is_v2, runner_checks, resolve_judgment, recovery_feedback
 from .providers import agent_payload, normalize, ProviderError
 from .runtime import model_operation, execute_tool, check_cancel, BudgetExceeded, ToolDenied
 from .services import ensure_snapshot, log
@@ -32,6 +33,7 @@ class State(TypedDict, total=False):
     evaluation_id: str
     judge_raw: str
     judge_error: str | None
+    judge_error_kind: str | None
     judge_valid: bool
     verdict: str
 
@@ -181,6 +183,25 @@ def judge(state):
                              {'role': 'user', 'content': canonical(data)}],
                    'max_output_tokens': config['budget']['max_output_tokens'],
                    'text': {'format': {'type': 'json_object'}}}
+        if is_v2(config):
+            ev = s.get(Evaluation, state['evaluation_id'])
+            if ev.execution_evidence is None:
+                ev.execution_evidence = runner_checks(call.role, response.raw_text, snapshot.task_input,
+                    {'status': tool.status, 'arguments': tool.arguments, 'result': tool.result} if tool else None)
+            profile = config['evaluation_profile']
+            data = {'role': call.role, 'policy': data['policy'],
+                    'evaluation_target': {'response_id': response.id, 'response_sha256': response.response_sha256,
+                                          'current_response': response.raw_text},
+                    'reference_material': {'task_input': snapshot.task_input, 'user_prompt': call.user_prompt},
+                    'server_checks': ev.execution_evidence}
+            if state['judge_attempt']:
+                validation = ev.evidence_validation or {}
+                data['retry_feedback'] = {k: validation.get(k) for k in
+                    ('failure_kind', 'failed_rules', 'error', 'judge_output')}
+                data['retry_feedback']['instruction'] = profile['retry_instruction']
+            payload['instructions'] = profile['common_rubric'] + '\n' + profile['role_rubrics'][call.role]
+            payload['input'] = [{'role': 'developer', 'content': 'Return JSON matching this schema: ' + canonical(profile['judge_schema'])},
+                                {'role': 'user', 'content': canonical(data)}]
     try:
         raw = model_operation(call.id, snapshot.id,
                               f"{state['phase']}:judge:{state['evaluation_id']}:validation{state['judge_attempt']}",
@@ -190,9 +211,10 @@ def judge(state):
         # A completed but empty/non-JSON answer is a schema failure, eligible for the validation retry.
         text = ''.join(part.get('text', '') for item in raw.get('output', []) if item.get('type') == 'message'
                        for part in item.get('content', []) if part.get('type') == 'output_text')
-        return {'judge_raw': text, 'judge_error': None}
+        return {'judge_raw': text, 'judge_error': None, 'judge_error_kind': None}
     except (ProviderError, BudgetExceeded) as exc:
-        return {'judge_raw': '', 'judge_error': str(exc)}
+        return {'judge_raw': '', 'judge_error': str(exc),
+                'judge_error_kind': 'budget' if isinstance(exc, BudgetExceeded) else 'provider'}
 
 
 @node('validate_evidence', 'L2')
@@ -201,16 +223,27 @@ def validate(state):
         response, ev = s.get(Response, state['response_id']), s.get(Evaluation, state['evaluation_id'])
         error = state.get('judge_error')
         result = None
-        if not error:
-            try:
-                result = validate_judge(state['judge_raw'], response.raw_text)
-            except ValueError as exc:
-                error = str(exc)
-        valid = result is not None
-        ev.evidence_validation = {'schema_version': 1, 'valid': valid, 'attempt': state['judge_attempt'] + 1, 'error': error}
+        config = s.get(Run, s.get(Call, state['call_id']).run_id).config_snapshot
+        if error:
+            validation = {'schema_version': 2, 'valid': False, 'schema_valid': None,
+                          'evidence_required': None, 'evidence_valid': None, 'failed_rules': [],
+                          'failure_kind': state.get('judge_error_kind') or 'unknown', 'error': error}
+        else:
+            result, validation = check_judge(state['judge_raw'], response.raw_text, state['role'], is_v2(config))
+        if is_v2(config):
+            validation = {**validation, 'schema_version': 3, 'judge_output': state.get('judge_raw', '')}
+        valid, error = validation['valid'], validation['error']
+        validation['attempt'] = state['judge_attempt'] + 1
+        previous = ev.evidence_validation or {}
+        attempts = {item['attempt']: item for item in previous.get('attempts', [])}
+        if previous.get('attempt') and not attempts:
+            attempts[previous['attempt']] = previous
+        attempts[validation['attempt']] = validation
+        ev.evidence_validation = {**validation, 'attempts': [attempts[key] for key in sorted(attempts)]}
         ev.judge_result = result if valid else uncertain(error or 'Judge evaluation failed')
     log(state['call_id'], 'judge_validation', 'completed' if valid else 'failed',
-        {'evaluation_id': state['evaluation_id'], 'attempt': state['judge_attempt'] + 1, 'valid': valid, 'error': error}, layer='L2')
+        {**validation, 'evaluation_id': state['evaluation_id'], 'phase': state['phase'],
+         'response_version': state['response_version']}, layer='L2')
     return {'judge_valid': valid, 'judge_attempt': state['judge_attempt'] + 1}
 
 
@@ -226,9 +259,18 @@ def aggregate_node(state):
         if ev.status in ('completed', 'error') and ev.aggregate_verdict:
             return {'verdict': ev.aggregate_verdict}
         tool = s.scalar(select(ToolExecution).where(ToolExecution.call_id == call.id))
+        config = s.get(Run, call.run_id).config_snapshot
         evidence = execution_evidence(call.role, response.raw_text, tool.result if tool else None)
+        if is_v2(config):
+            snapshot = s.get(Snapshot, state['input_snapshot_id'])
+            evidence = ev.execution_evidence or runner_checks(call.role, response.raw_text, snapshot.task_input,
+                {'status': tool.status, 'arguments': tool.arguments, 'result': tool.result} if tool else None)
         ev.execution_evidence = evidence
-        ev.aggregate_verdict = aggregate(ev.lexical_result, ev.judge_result, evidence)
+        if is_v2(config):
+            ev.judgment_resolution = resolve_judgment(ev.lexical_result, ev.judge_result, evidence, state['judge_valid'])
+            ev.aggregate_verdict = ev.judgment_resolution['aggregate_verdict']
+        else:
+            ev.aggregate_verdict = aggregate(ev.lexical_result, ev.judge_result, evidence)
         ev.status = 'completed' if state['judge_valid'] else 'error'
         s.flush()
         if response.response_version == 0:
@@ -250,7 +292,11 @@ def after_aggregate(state):
 @node('reset_context', 'L3')
 def reset_context(state):
     with transaction() as s:
-        snapshot = ensure_snapshot(s, s.get(Call, state['call_id']), 1)
+        call = s.get(Call, state['call_id'])
+        config = s.get(Run, call.run_id).config_snapshot
+        feedback = recovery_feedback(s.get(Response, state['response_id']), s.get(Evaluation, state['evaluation_id'])) \
+            if config.get('recovery_strategy') == 'feedback' else None
+        snapshot = ensure_snapshot(s, call, 1, feedback)
         tool = s.scalar(select(ToolExecution).where(ToolExecution.call_id == state['call_id'], ToolExecution.status == 'completed'))
         return {'input_snapshot_id': snapshot.id, 'history_snapshot_id': snapshot.id,
                 'response_version': 1, 'recovery_count': 1, 'judge_attempt': 0,

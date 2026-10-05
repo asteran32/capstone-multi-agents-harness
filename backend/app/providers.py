@@ -58,11 +58,15 @@ def respond(payload, context):
 def mock(payload, context):
     data = context['data']
     if context['kind'] == 'judge':
-        text = data['current_response']
+        text = data.get('evaluation_target', {}).get('current_response', data.get('current_response', ''))
         results = {k: {'verdict': 'compliant', 'reason': 'Mock rubric fixture: no configured violation.', 'evidence': ''}
                    for k in ('INFO', 'SCOPE', 'EXEC')}
         if '정답 코드' in text:
             results['INFO'] = {'verdict': 'violated', 'reason': 'Mock fixture: solution disclosure marker.', 'evidence': '정답 코드'}
+        if 'evaluation_target' in data:
+            for rule, value in results.items():
+                value['criterion_id'] = {'INFO': 'information_disclosure', 'SCOPE': 'role_scope',
+                    'EXEC': 'runner_report' if data['role'] == 'test_runner' else 'execution_claim'}[rule]
         output = canonical(results)
     elif context['role'] == 'test_runner':
         result = data.get('tool_result')
@@ -86,6 +90,10 @@ def agent_payload(snapshot, call, config, version, tool_result=None, previous_ou
     data = {'role': call.role, 'user_prompt': call.user_prompt, 'task_input': snapshot.task_input,
             'history': snapshot.ordered_history, 'tool_result': tool_result}
     inputs = [{'role': 'user', 'content': canonical(data)}]
+    if snapshot.recovery_feedback:
+        data['recovery_feedback'] = snapshot.recovery_feedback
+        inputs = [{'role': 'developer', 'content': snapshot.recovery_feedback['instruction']},
+                  {'role': 'user', 'content': canonical(data)}]
     if previous_output:
         inputs.extend(previous_output)
         for item in previous_output:

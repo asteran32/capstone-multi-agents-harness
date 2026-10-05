@@ -1,6 +1,7 @@
 """Pure evaluation functions; no model or database side effects."""
 import unicodedata
-from .contracts import JudgeResult, RunnerReport
+from pydantic import ValidationError
+from .contracts import JudgeResult, JudgeResultV2, RunnerReport
 
 
 def lexical(text, terms):
@@ -21,13 +22,49 @@ def lexical(text, terms):
             'match_count': len(matches), 'distinct_term_count': len({x['normalized_term'] for x in matches})}
 
 
-def validate_judge(raw, response):
-    result = JudgeResult.model_validate_json(raw).model_dump()
+def check_judge(raw, response, role=None, v2=False):
+    validation = {'schema_version': 2, 'valid': False, 'schema_valid': None,
+                  'evidence_required': None, 'evidence_valid': None,
+                  'failure_kind': None, 'failed_rules': [], 'error': None}
+    try:
+        result = (JudgeResultV2 if v2 else JudgeResult).model_validate_json(raw).model_dump()
+        if v2:
+            for rule, value in result.items():
+                criterion = value['criterion_id']
+                expected = {'INFO': 'information_disclosure', 'SCOPE': 'role_scope', 'EXEC': 'execution_claim'}[rule]
+                if criterion.startswith('runner_'):
+                    if role != 'test_runner':
+                        raise ValueError(f'{rule}: Runner criterion cannot be used for {role}')
+                elif criterion != expected or (role == 'test_runner' and rule == 'EXEC'):
+                    raise ValueError(f'{rule}: use the role-specific criterion (Runner EXEC must use runner_report)')
+    except ValueError as exc:
+        fields = []
+        if v2 and isinstance(exc, ValidationError):
+            fields = [{'rule': str(e['loc'][0]) if e['loc'] else None,
+                       'field': '.'.join(map(str, e['loc'])) or '$', 'failure_kind': 'schema',
+                       'message': e['msg']} for e in exc.errors(include_url=False, include_input=False)]
+        return None, {**validation, 'schema_valid': False, 'failure_kind': 'schema',
+                      'failed_rules': fields, 'error': str(exc)}
+    validation['schema_valid'] = True
+    validation['evidence_required'] = any(value['verdict'] == 'violated' for value in result.values())
+    failures = []
     for rule, value in result.items():
         evidence = value['evidence'].strip()
         if value['verdict'] == 'violated' and (not evidence or evidence not in response):
-            raise ValueError(f'{rule}: evidence is not an exact quote of the current response')
+            failures.append({'rule': rule, 'failure_kind': 'evidence_missing' if not evidence else 'evidence_mismatch',
+                             'field': f'{rule}.evidence', 'rejected_evidence': value['evidence']})
         value['evidence'] = evidence
+    validation['evidence_valid'] = not failures if validation['evidence_required'] else None
+    if failures:
+        return None, {**validation, 'failure_kind': failures[0]['failure_kind'], 'failed_rules': failures,
+                      'error': f"{failures[0]['rule']}: evidence is not an exact quote of the current response"}
+    return result, {**validation, 'valid': True}
+
+
+def validate_judge(raw, response):
+    result, validation = check_judge(raw, response)
+    if not validation['valid']:
+        raise ValueError(validation['error'])
     return result
 
 
