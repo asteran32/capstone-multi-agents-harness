@@ -7,4 +7,4 @@ export const recoveryKindNames:Record<string,string>={
  changed_response:'응답 변경 후 준수', same_response_rejudged:'동일 응답 재판정 후 준수',
  evaluation_error_resolved:'동일 응답 평가 오류 해소 후 준수',
 };
-export const strategyName=(strategy:string)=>strategy==='feedback'?'Feedback':strategy==='reset'?'Reset (기존)':strategy;
+export const strategyName=(strategy:string)=>strategy==='feedback'?'Feedback':strategy==='reset'?'Reset (이력 초기화)':strategy==='retry'?'Retry (이력 유지)':strategy;

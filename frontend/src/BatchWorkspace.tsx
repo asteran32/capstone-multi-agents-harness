@@ -2,6 +2,7 @@ import {useEffect, useRef, useState} from 'react';
 import {api, downloadCsv, post} from './api';
 import {Batch, Dict, ExperimentMode, Role, names, roles} from './types';
 import {BatchAnalytics} from './BatchAnalytics';
+import {ReevaluationPanel} from './ReevaluationPanel';
 import './batches.css';
 
 const modes: ExperimentMode[] = ['L1', 'L1+L2', 'FULL'];
@@ -93,6 +94,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
      {!finished.includes(batch.status)&&<button disabled={busy||batch.status==='cancel_requested'} onClick={async()=>{setBusy(true);try{await post(`/batches/${batch.id}/cancel`);setReload(x=>x+1)}catch(e){onError(String(e))}finally{setBusy(false)}}}>남은 실행 취소</button>}
     </section>
     <BatchAnalytics key={batch.id} batchId={batch.id} onInspect={onRun}/>
+    <ReevaluationPanel key={'reevaluation:'+batch.id} batch={batch} config={config} onBatch={onBatch} onInspect={onRun} onError={onError}/>
     <section className="batch-rerun" aria-label="모드를 바꿔 다시 실행">
      <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·정답 후보·모델·정책·요청·Round를 유지하고 새 기록을 만듭니다.</p></div>
      <label>새 실험 모드<select value={rerunMode} onChange={e=>setRerunMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>

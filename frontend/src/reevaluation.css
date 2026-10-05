@@ -1,0 +1,16 @@
+.reevaluation{min-width:0;border-bottom:1px solid var(--line);padding:0 0 28px;margin-bottom:28px;font-size:12px}
+.reevaluation>label,.reevaluation details,.reeval-prepare,.reeval-meta{margin:14px 0}
+.reevaluation h3{font-size:16px;margin:18px 0 12px}.reevaluation h4{font-size:12px;margin:14px 0 8px}
+.reevaluation p,.reevaluation li{line-height:1.8}.reevaluation summary{cursor:pointer;font-weight:550}
+.reevaluation pre{background:#f2f4f1;padding:14px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;font-size:11px;line-height:1.7}
+.reeval-meta small{overflow-wrap:anywhere;color:var(--muted);line-height:1.8}
+.reeval-note,.reeval-start,.reeval-seal{padding:16px;background:#eef3f0;margin:16px 0}
+.reeval-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:12px;align-items:start}
+.reeval-fields label{min-width:0}.reevaluation input,.reevaluation select,.reevaluation textarea{max-width:100%}
+.reeval-case-list{max-height:320px;overflow:auto;margin:14px 0;border-block:1px solid var(--line)}
+.reeval-case-list table{min-width:690px}.reeval-case-list tr[aria-selected=true]{background:#e6efe8}.reeval-case-list th{position:sticky;top:0;background:#f6f7f3;z-index:1}
+.reeval-case{padding:16px 18px;border:1px solid var(--line);margin:18px 0;scroll-margin-top:80px}
+.reeval-scores{margin:20px 0;overflow-x:auto}.reeval-scores table{width:100%;min-width:420px}.reeval-scores td{font-variant-numeric:tabular-nums;white-space:nowrap}
+.reeval-results progress{width:100%;margin:8px 0}.reeval-actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+.reeval-comparison{margin-top:24px;border-top:1px solid var(--line);padding-top:8px}.reeval-comparison ul{padding-left:20px}
+@media(max-width:600px){.reeval-case{padding:10px}.reeval-start,.reeval-note,.reeval-seal{padding:12px}.reevaluation{font-size:11px}.reeval-scores table{min-width:0;table-layout:fixed}.reeval-scores th,.reeval-scores td{padding:12px 8px;font-size:10px}.reeval-scores th:first-child{width:42%}}
