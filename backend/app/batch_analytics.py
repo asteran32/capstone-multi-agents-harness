@@ -79,7 +79,7 @@ def batch_analytics(s, batch):
     logs = list(s.scalars(select(Log).where(Log.call_id.in_(call_ids),
                                            Log.node_name.in_(['judge_validation', 'model_request']))
                          .order_by(Log.call_id, Log.event_seq)))
-    jobs = list(s.scalars(select(Job).where(Job.run_id.in_(run_ids))))
+    jobs = list(s.scalars(select(Job).where(Job.run_id.in_(run_ids), Job.job_type.in_(['run', 'offline']))))
 
     def location(call, version=0):
         return {'run_id': call.run_id, 'call_id': call.id, 'source_task_id': manifest[call.run_id]['source_task_id'],

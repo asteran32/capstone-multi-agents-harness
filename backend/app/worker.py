@@ -119,7 +119,12 @@ def process_job(job_id, agent, offline):
                             call.status = 'blocked' if isinstance(exc, ToolDenied) else 'failed'
                             call.finished_at, call.error = now(), {'code': type(exc).__name__, 'message': str(exc)}
                         log(call_id, 'call', 'failed', {'error': str(exc)})
-            else:
+            elif job_type == 'reevaluation':
+                from .reevaluation_worker import process_reevaluation
+                with transaction() as s:
+                    reevaluation_id = s.get(Job, job_id).payload['reevaluation_id']
+                process_reevaluation(reevaluation_id)
+            elif job_type == 'offline':
                 with transaction() as s:
                     items = list(s.scalars(select(Response).join(Call, Call.id == Response.call_id)
                                  .where(Call.run_id == run_id).order_by(Call.call_seq, Response.response_version)))
@@ -141,6 +146,8 @@ def process_job(job_id, agent, offline):
                                  'response_id': response.id, 'response_version': response.response_version,
                                  'input_snapshot_id': snapshot.id, 'phase': 'offline', 'judge_attempt': 0}
                     invoke_or_resume(offline, state, f'offline:{response_id}:{version}')
+            else:
+                raise ValueError(f'Unknown job type: {job_type}')
             verify_lease()
             with transaction() as s:
                 job = s.get(Job, job_id)

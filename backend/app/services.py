@@ -14,9 +14,10 @@ class Conflict(ValueError):
     pass
 
 
-def create_run(s, body, key):
+def create_run(s, body, key, evaluation_config=None, recovery_strategy='feedback'):
     request = body.model_dump(mode='json')
-    request_hash = digest(request)
+    request_hash = digest(request if evaluation_config is None else {**request, 'frozen_evaluator': evaluation_config,
+                                                                   'recovery_strategy': recovery_strategy})
     existing = s.scalar(select(Run).where(Run.idempotency_key == key))
     if existing:
         if existing.creation_request_sha256 != request_hash:
@@ -30,14 +31,19 @@ def create_run(s, body, key):
             raise ValueError('서버에 등록되지 않은 모델입니다.')
     raw = body.policy_raw if body.policy_raw is not None else DEFAULT_POLICY.read_text()
     policy = parse_policy(raw).model_dump()
-    profile = evaluation_profile()
+    profile = evaluation_config['evaluation_profile'] if evaluation_config else evaluation_profile()
+    if evaluation_config and (policy != evaluation_config['policy'] or body.judge_model != evaluation_config['judge_model']
+                             or body.budget.max_output_tokens != evaluation_config['budget']['max_output_tokens']):
+        raise ValueError('검증된 평가 기준과 새 실행 설정이 일치하지 않습니다.')
+    if recovery_strategy not in ('feedback', 'reset', 'retry'):
+        raise ValueError('Unknown recovery strategy')
     config = {**request, 'policy_raw': raw, 'policy': policy, 'policy_hash': digest(policy),
               'renderer_version': '1', 'data_version': task.source_version,
               'source_task_id': task.source_task_id, 'entry_point': task.source_record['entry_point'],
               'task_sha256': task.source_sha256, 'candidate_sha256': candidate.code_sha256,
               'transport_attempts': 2, 'judge_attempts': 2, 'schema_version': 1,
               'sandbox_mode': settings.sandbox_mode,
-              'recovery_strategy': 'feedback', 'evaluation_profile': profile,
+              'recovery_strategy': recovery_strategy, 'evaluation_profile': profile,
               'evaluation_version': evaluation_version(policy, body.judge_model, body.budget.max_output_tokens, profile)}
     run = Run(id=uid(), idempotency_key=key, creation_request_sha256=request_hash,
               mode=body.mode, config_snapshot=config)
@@ -104,7 +110,7 @@ def ensure_snapshot(s, call, version, feedback=None):
     parent = s.scalar(select(Snapshot).where(Snapshot.call_id == call.id, Snapshot.response_version == 0)) if version else None
     if version and not parent:
         raise ValueError('복구 원본 snapshot이 없습니다.')
-    history = [] if version else select_history(s, call)
+    history = (parent.ordered_history if config.get('recovery_strategy') == 'retry' else []) if version else select_history(s, call)
     dto = parent.task_input if parent else task_input(s, call)
     prompt = parent.role_prompt if parent else render_policy(policy, MODES[run.mode][0])
     if version and config.get('recovery_strategy') == 'feedback' and not feedback:
@@ -114,7 +120,9 @@ def ensure_snapshot(s, call, version, feedback=None):
         content['recovery_feedback'] = feedback
     snapshot = Snapshot(call_id=call.id, response_version=version, role_prompt=prompt,
                         task_input=dto, ordered_history=history, parent_snapshot_id=parent.id if parent else None,
-                        reset_reason=('confirmed_violation_feedback' if feedback else 'confirmed_violation') if parent else None,
+                        reset_reason=('confirmed_violation_feedback' if feedback else
+                                      'confirmed_violation_retry' if config.get('recovery_strategy') == 'retry' else
+                                      'confirmed_violation') if parent else None,
                         recovery_feedback=feedback, content_sha256=digest(content))
     s.add(snapshot)
     s.flush()

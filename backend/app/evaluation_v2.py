@@ -55,6 +55,29 @@ def is_v2(config):
     return bool(profile)
 
 
+def judge_payload(config, role, response_id, response_sha256, text, task_input, user_prompt,
+                  execution, retry_feedback=None):
+    """One frozen protocol for online judging and fixed-corpus re-evaluation."""
+    if not is_v2(config):
+        raise ValueError('Version 2 evaluation profile required')
+    profile = config['evaluation_profile']
+    data = {'role': role, 'policy': next(p for p in config['policy']['roles'] if p['role'] == role),
+            'evaluation_target': {'response_id': response_id, 'response_sha256': response_sha256,
+                                  'current_response': text},
+            'reference_material': {'task_input': task_input, 'user_prompt': user_prompt},
+            'server_checks': execution}
+    if retry_feedback is not None:
+        data['retry_feedback'] = {k: retry_feedback.get(k) for k in
+                                 ('failure_kind', 'failed_rules', 'error', 'judge_output')}
+        data['retry_feedback']['instruction'] = profile['retry_instruction']
+    return {'model': config['judge_model'], 'store': False,
+            'instructions': profile['common_rubric'] + '\n' + profile['role_rubrics'][role],
+            'input': [{'role': 'developer', 'content': 'Return JSON matching this schema: ' + canonical(profile['judge_schema'])},
+                      {'role': 'user', 'content': canonical(data)}],
+            'max_output_tokens': config['budget']['max_output_tokens'],
+            'text': {'format': {'type': 'json_object'}}}, data
+
+
 def check(verdict, reason, **details):
     return {'verdict': verdict, 'reason': reason, **details}
 

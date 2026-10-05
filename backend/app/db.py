@@ -178,6 +178,64 @@ class Job(Base):
     error: Mapped[dict | None] = mapped_column(J, nullable=True)
 
 
+class ReviewSet(Base):
+    __tablename__ = 'review_sets'
+    batch_id: Mapped[str] = mapped_column(ForeignKey('app.batches.id'))
+    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    corpus_sha256: Mapped[str] = mapped_column(String(64))
+    config_snapshot: Mapped[dict] = mapped_column(J)
+    review: Mapped[dict] = mapped_column(J, default=dict)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(Text, default='draft')
+
+
+class ReviewCase(Base):
+    __tablename__ = 'review_cases'
+    __table_args__ = (UniqueConstraint('review_set_id', 'case_key'),)
+    review_set_id: Mapped[str] = mapped_column(ForeignKey('app.review_sets.id'))
+    case_key: Mapped[str] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(Text)
+    role: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict] = mapped_column(J)
+    data_sha256: Mapped[str] = mapped_column(String(64))
+    label: Mapped[dict] = mapped_column(J, default=dict)
+
+
+class Reevaluation(Base):
+    __tablename__ = 'reevaluations'
+    review_set_id: Mapped[str] = mapped_column(ForeignKey('app.review_sets.id'))
+    idempotency_key: Mapped[str] = mapped_column(Text, unique=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    config_snapshot: Mapped[dict] = mapped_column(J)
+    labels_snapshot: Mapped[dict] = mapped_column(J)
+    cancel_requested: Mapped[bool] = mapped_column(default=False)
+    comparison_batches: Mapped[list] = mapped_column(J, default=list)
+
+
+class ReevaluationResult(Base):
+    __tablename__ = 'reevaluation_results'
+    __table_args__ = (UniqueConstraint('reevaluation_id', 'case_id'),)
+    reevaluation_id: Mapped[str] = mapped_column(ForeignKey('app.reevaluations.id'))
+    case_id: Mapped[str] = mapped_column(ForeignKey('app.review_cases.id'))
+    status: Mapped[str] = mapped_column(Text, default='pending')
+    result: Mapped[dict] = mapped_column(J, default=dict)
+
+
+class ReevaluationRequest(Base):
+    __tablename__ = 'reevaluation_requests'
+    __table_args__ = (UniqueConstraint('result_id', 'validation_attempt', 'transport_attempt'),)
+    reevaluation_id: Mapped[str] = mapped_column(ForeignKey('app.reevaluations.id'))
+    result_id: Mapped[str] = mapped_column(ForeignKey('app.reevaluation_results.id'))
+    validation_attempt: Mapped[int] = mapped_column(Integer)
+    transport_attempt: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(Text)
+    request_payload: Mapped[dict] = mapped_column(J)
+    response_payload: Mapped[dict | None] = mapped_column(J, nullable=True)
+    error: Mapped[dict | None] = mapped_column(J, nullable=True)
+
+
 engine = create_engine(settings.database_url, pool_pre_ping=True)
 Session = sessionmaker(engine, expire_on_commit=False)
 

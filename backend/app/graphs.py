@@ -7,7 +7,7 @@ from langgraph.graph import StateGraph, START, END
 from .contracts import (MODES, RUBRIC, JUDGE_JSON_INSTRUCTION, JudgeResult, RunnerReport, canonical, digest)
 from .db import (transaction, Call, Run, Snapshot, Response, Evaluation, ToolExecution, now)
 from .evaluation import lexical, check_judge, uncertain, execution_evidence, aggregate, metrics
-from .evaluation_v2 import is_v2, runner_checks, resolve_judgment, recovery_feedback
+from .evaluation_v2 import is_v2, runner_checks, resolve_judgment, recovery_feedback, judge_payload
 from .providers import agent_payload, normalize, ProviderError
 from .runtime import model_operation, execute_tool, check_cancel, BudgetExceeded, ToolDenied
 from .services import ensure_snapshot, log
@@ -188,20 +188,9 @@ def judge(state):
             if ev.execution_evidence is None:
                 ev.execution_evidence = runner_checks(call.role, response.raw_text, snapshot.task_input,
                     {'status': tool.status, 'arguments': tool.arguments, 'result': tool.result} if tool else None)
-            profile = config['evaluation_profile']
-            data = {'role': call.role, 'policy': data['policy'],
-                    'evaluation_target': {'response_id': response.id, 'response_sha256': response.response_sha256,
-                                          'current_response': response.raw_text},
-                    'reference_material': {'task_input': snapshot.task_input, 'user_prompt': call.user_prompt},
-                    'server_checks': ev.execution_evidence}
-            if state['judge_attempt']:
-                validation = ev.evidence_validation or {}
-                data['retry_feedback'] = {k: validation.get(k) for k in
-                    ('failure_kind', 'failed_rules', 'error', 'judge_output')}
-                data['retry_feedback']['instruction'] = profile['retry_instruction']
-            payload['instructions'] = profile['common_rubric'] + '\n' + profile['role_rubrics'][call.role]
-            payload['input'] = [{'role': 'developer', 'content': 'Return JSON matching this schema: ' + canonical(profile['judge_schema'])},
-                                {'role': 'user', 'content': canonical(data)}]
+            payload, data = judge_payload(config, call.role, response.id, response.response_sha256,
+                response.raw_text, snapshot.task_input, call.user_prompt, ev.execution_evidence,
+                (ev.evidence_validation or {}) if state['judge_attempt'] else None)
     try:
         raw = model_operation(call.id, snapshot.id,
                               f"{state['phase']}:judge:{state['evaluation_id']}:validation{state['judge_attempt']}",

@@ -112,7 +112,7 @@ def batch_results_csv(s, batch):
     for tool in s.execute(select(ToolExecution.call_id, ToolExecution.status, ToolExecution.result)
                           .where(ToolExecution.call_id.in_(call_ids)).order_by(ToolExecution.created_at, ToolExecution.id)):
         tools[tool.call_id].append({'status': tool.status, 'result': tool.result})
-    for job in s.scalars(select(Job).where(Job.run_id.in_(run_ids))):
+    for job in s.scalars(select(Job).where(Job.run_id.in_(run_ids), Job.job_type.in_(['run', 'offline']))):
         jobs[job.run_id][job.job_type] = job
 
     output = io.StringIO(newline='')

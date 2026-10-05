@@ -27,6 +27,8 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')),'head')
     # Also exercise upgrading an existing 0001 installation, whose metadata
     # predates the batches table. All changes are in the disposable test DB.
+    for model in (db.ReevaluationRequest, db.ReevaluationResult, db.Reevaluation, db.ReviewCase, db.ReviewSet):
+        model.__table__.drop(engine)
     db.Batch.__table__.drop(engine)
     with engine.begin() as connection:
         connection.execute(text("UPDATE alembic_version SET version_num='0001'"))
@@ -129,4 +131,25 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     assert rows[-1]['call_status'] == 'cancelled' and rows[-1]['agent_total_tokens'] == ''
     assert rows[0]['csv_schema_version'] == '3' and rows[0]['m4_threshold'] == '0.2'
     assert rows[0]['analysis_revision'] == '1' and rows[0]['initial_schema_valid'] == 'true'
+    # Independent re-evaluation tables/queue work on PostgreSQL without changing source records.
+    from app.reevaluation import create_review_set, cases_for, update_label, seal_review, start_reevaluation, execution_summary
+    from app.contracts import ReviewSetCreate, ReviewLabel, ReviewSeal
+    with db.transaction() as s:
+        source_responses = list(s.scalars(select(db.Response.response_sha256).order_by(db.Response.id)))
+        source_requests = s.scalar(select(func.count()).select_from(db.ModelRequest))
+        review_set = create_review_set(s, s.get(db.Batch, batch_id), ReviewSetCreate(), 'pg-review')
+        for case in cases_for(s, review_set.id):
+            update_label(s, review_set, case, ReviewLabel(revision=review_set.revision,
+                verdict=case.label.get('suggested_verdict', 'compliant'), reason='PG fixture', reviewer='test'))
+        seal_review(s, review_set, ReviewSeal(revision=review_set.revision, reviewer='test', policy_confirmed=True))
+        replay = start_reevaluation(s, review_set, 'pg-replay')
+        replay_id = replay.id
+    process_job(claim(), None, None)
+    with db.transaction() as s:
+        state = execution_summary(s, s.get(db.Reevaluation, replay_id), detail=True)
+        assert state['status'] == 'completed' and state['finished'] == state['total']
+        assert state['requests'] == state['total']
+        assert list(s.scalars(select(db.Response.response_sha256).order_by(db.Response.id))) == source_responses
+        assert s.scalar(select(func.count()).select_from(db.ModelRequest)) == source_requests
+    assert client.get(f'/api/reevaluations/{replay_id}/results.csv').status_code == 200
     engine.dispose()

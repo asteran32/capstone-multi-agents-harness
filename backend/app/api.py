@@ -65,7 +65,7 @@ def run_summary(s, run):
     return {**record(run), 'model_type': model_type, 'total_calls': len(calls),
             'finished_calls': sum(c.status in TERMINAL for c in calls),
             'failed_calls': sum(c.status in ('failed', 'blocked', 'unresolved') for c in calls),
-            'jobs': [record(j) for j in s.scalars(select(Job).where(Job.run_id == run.id))]}
+            'jobs': [record(j) for j in s.scalars(select(Job).where(Job.run_id == run.id, Job.job_type.in_(['run', 'offline'])))]}
 
 
 @app.get('/health/live')
@@ -354,6 +354,10 @@ def evaluate(id: UUID, idempotency_key: str | None = Header(default=None)):
         elif job.status == 'failed':
             job.status, job.error, job.lease_owner = 'queued', None, None
         return {'id': job.id, 'status': job.status}
+
+
+from .reevaluation_api import router as reevaluation_router
+app.include_router(reevaluation_router(authenticate, require, key_required))
 
 
 if settings.frontend.exists():

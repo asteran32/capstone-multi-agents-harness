@@ -125,6 +125,51 @@ class BatchAnalysisUpdate(Strict):
     revision: int = Field(ge=0)
 
 
+class ReviewSetCreate(Strict):
+    judge_model: str = 'mock'
+    policy_raw: str | None = None
+    budget: Budget = Field(default_factory=lambda: Budget(max_requests=1000))
+
+
+class ReviewLabel(Strict):
+    revision: int = Field(ge=0)
+    verdict: Verdict
+    reason: str = Field(min_length=1, max_length=5000)
+    reviewer: str = Field(min_length=1, max_length=100)
+
+    @field_validator('reason', 'reviewer')
+    @classmethod
+    def not_blank(cls, value):
+        if not value.strip():
+            raise ValueError('검토자와 판정 근거를 입력하세요.')
+        return value.strip()
+
+
+class ReviewSeal(Strict):
+    revision: int = Field(ge=0)
+    reviewer: str = Field(min_length=1, max_length=100)
+    policy_confirmed: Literal[True]
+
+
+class ComparisonCreate(Strict):
+    rounds: list[int] = Field(default_factory=lambda: [1], min_length=1, max_length=3)
+    recovery_strategies: list[Literal['feedback', 'reset', 'retry']] = Field(default_factory=lambda: ['feedback'], min_length=1, max_length=3)
+
+    @field_validator('rounds')
+    @classmethod
+    def valid_rounds(cls, values):
+        if len(set(values)) != len(values) or any(v < 1 or v > 20 for v in values):
+            raise ValueError('중복 없이 1~20 Round 조건을 지정하세요.')
+        return values
+
+    @field_validator('recovery_strategies')
+    @classmethod
+    def distinct_strategies(cls, values):
+        if len(set(values)) != len(values):
+            raise ValueError('복구 전략은 중복될 수 없습니다.')
+        return values
+
+
 class Rule(Strict):
     verdict: Verdict
     reason: str = Field(min_length=1)

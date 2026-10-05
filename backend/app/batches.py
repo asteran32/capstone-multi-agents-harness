@@ -9,8 +9,11 @@ from .services import Conflict, DEFAULT_POLICY, create_run
 JOB_TERMINAL = ('completed', 'failed', 'cancelled')
 
 
-def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None):
-    request_hash = digest({'settings': body.model_dump(mode='json'), 'source_batch_id': source.id if source else None})
+def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, evaluation_config=None, recovery_strategy='feedback'):
+    request = {'settings': body.model_dump(mode='json'), 'source_batch_id': source.id if source else None}
+    if evaluation_config:
+        request.update(frozen_evaluator=evaluation_config, recovery_strategy=recovery_strategy)
+    request_hash = digest(request)
     existing = s.scalar(select(Batch).where(Batch.idempotency_key == key))
     if existing:
         if existing.creation_request_sha256 != request_hash:
@@ -58,7 +61,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None):
     for index, (task, candidate) in enumerate(selected, 1):
         run_body = RunCreate(**{k: v for k, v in config.items() if k != 'evaluate_l1'},
                              task_id=task.id, candidate_id=candidate.id)
-        run = create_run(s, run_body, f'batch:{batch.id}:{index}')
+        run = create_run(s, run_body, f'batch:{batch.id}:{index}', evaluation_config, recovery_strategy)
         run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index}
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run'))
         job.payload = {**job.payload, 'batch_id': batch.id, 'depends_on_key': previous_key}
@@ -83,7 +86,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None):
 def batch_summary(s, batch, detail=False):
     ids = [item['run_id'] for item in batch.manifest]
     runs = {r.id: r for r in s.scalars(select(Run).where(Run.id.in_(ids)))}
-    jobs = list(s.scalars(select(Job).where(Job.run_id.in_(ids))))
+    jobs = list(s.scalars(select(Job).where(Job.run_id.in_(ids), Job.job_type.in_(['run', 'offline']))))
     by_run = {(j.run_id, j.job_type): j for j in jobs}
     counts = {r.run_id: r for r in s.execute(select(
         Call.run_id, func.count().label('total'),
@@ -130,7 +133,7 @@ def batch_summary(s, batch, detail=False):
 def cancel_batch(s, batch):
     batch.cancel_requested = True
     ids = [item['run_id'] for item in batch.manifest]
-    for job in s.scalars(select(Job).where(Job.run_id.in_(ids)).with_for_update()):
+    for job in s.scalars(select(Job).where(Job.run_id.in_(ids), Job.job_type.in_(['run', 'offline'])).with_for_update()):
         if job.status == 'queued':
             job.status = 'cancelled'
             if job.job_type == 'run':
