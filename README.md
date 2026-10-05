@@ -43,8 +43,8 @@ make down
 |---|---|
 | 실행 | Base / L1 / L1+L2 / FULL, round 및 역할 순서 고정, 취소·미완료 작업 재개 |
 | L1 | 모드별 강화 프롬프트, 역할별 입력 DTO, 서버 측 도구 권한 |
-| L2 | NFKC·casefold lexical 검사, 중첩 일치, Judge INFO/SCOPE/EXEC, 현재 응답의 정확한 인용 검증 |
-| L3 | FULL의 최초 확정 위반에만 빈 history로 1회 재생성, 최초 및 복구 응답 보존 |
+| L2 | NFKC·casefold 금지 문자열 검사, 역할별 Judge INFO/SCOPE/EXEC, 원문 인용 검증·오류 피드백 재시도, Runner 서버 검사와 판정 충돌 처리 |
+| L3 | 새 FULL 실행은 최초 위반 시 빈 history에 원본 응답·확인된 위반을 전달하는 feedback 복구 최대 1회. 기존 실행의 reset 전략과 최초·복구 기록 보존 |
 | History | 동일 run·role의 이전 종료 작업 최대 5건, 실패 포함, 실제 입력 snapshot 고정 |
 | 지표 | 최초 응답 기준 최근 5회 M1~M4, V/C/U, coverage, warmup, null 및 disabled 구분 |
 | 사후 평가 | 종료된 Base/L1 출력만 offline 평가, 생성·도구·복구 실행 없음 |
@@ -67,6 +67,10 @@ make down
 2. **30문제 일괄 실행 시작**을 누르면 30개의 독립 Run을 한 번에 접수합니다. L1은 기본적으로 각 Run의 생성 후 사후 평가까지 끝내고 다음 문제로 넘어갑니다.
 3. 진행 화면에서 문제별 생성·평가 상태와 오류를 확인하고 **기록 열기**로 기존 상세 화면을 봅니다. `?batch=ID` 주소나 일괄 실행 기록에서 다시 열 수 있습니다.
 4. **같은 구성으로 다시 실행**에서 L1+L2 또는 FULL을 선택하면, 문제·후보·모델·정책·요청·Round·예산을 유지한 새 일괄 실험이 만들어집니다. 기존 기록은 보존합니다.
+5. **일괄 실행 기록**에서 해당 배치의 **열기 →** 옆 **결과 다운로드**를 누르면 분석용 CSV를 받습니다. 실행 중·취소된 배치도 다운로드할 수 있습니다.
+6. 배치를 열면 상단 **실험 요약**에서 최초·최종 위반, 준수 응답 제공률, 역할별 Min/Max, L3 복구, Judge 검증 실패, 실행·토큰·시간을 확인합니다. 사건과 Min/Max에서 해당 호출 상세 기록으로 이동할 수 있습니다.
+
+**M4 threshold (%)**는 배치별 분석 설정으로 저장하며 실행 조건과 독립적입니다. 공란은 미설정, 초과 기준은 `M4 > threshold`입니다. 같은 문제·역할의 평가창 5건이 갖춰진 관측만 정식 집계하므로 1 Round 실험은 Warmup으로 표시합니다. 모드 변경 재실행에는 현재 threshold만 이어받습니다. 상세 지표·분모·과거 기록 처리 기준은 [일괄 실험 대시보드 명세](docs/web_guardrail_platform_batch_dashboard_spec_ko.md)를 참고하세요.
 
 실행 순서는 서버 DB에 저장되므로 브라우저를 닫아도 계속됩니다. 기존 단일 worker가 처리하며, 한 문제에서 오류가 발생하면 기록한 뒤 다음 문제로 진행합니다. **남은 실행 취소**는 대기 작업을 취소하고 진행 중인 모델·도구 요청이 반환된 다음 중지합니다. 취소한 일괄 실행은 새 실행으로 다시 시작합니다. 동일 접수 요청의 재전송은 같은 idempotency key를 사용하는 경우 중복 Run을 만들지 않습니다.
 
@@ -79,10 +83,40 @@ make down
 | `POST /api/batches` | 정답 30문제 접수. `mode`, `rounds`, `agent_model`, `judge_model`, `prompts_by_role`, `budget`, `policy_raw`, `evaluate_l1` 사용 |
 | `GET /api/batches` | 일괄 실행 목록·진행 상태, offset/limit 지원 |
 | `GET /api/batches/{id}` | 고정 manifest와 문제별 Run·사후 평가 상태 |
+| `GET /api/batches/{id}/results.csv` | 해당 배치의 분석용 CSV 다운로드. 기존 인증 필요 |
+| `GET /api/batches/{id}/analytics` | 요약·역할별 지표·복구·Judge 검증·비용·시간·사건 목록 |
+| `PUT /api/batches/{id}/analysis-settings` | `m4_threshold`(0~1 또는 null), 현재 `revision`으로 분석 설정 저장 |
 | `POST /api/batches/{id}/rerun` | `{"mode":"L1+L2"}` 등으로 모드만 바꿔 새 일괄 실행 접수 |
 | `POST /api/batches/{id}/cancel` | 진행 중·대기 작업 취소 |
 
 생성·재실행 API는 `Idempotency-Key`가 필요하며 기존과 같은 인증을 사용합니다. `0002` migration이 `app.batches`를 추가합니다. 기존 환경은 `./start.sh`로 새 코드·화면과 migration을 반영하세요. 이 기능 추가만으로 실제 모델 실험을 자동 실행하지는 않습니다.
+
+`0003` migration은 기존 배치에 분석 설정을 추가합니다. Judge 검증은 새 실행부터 schema·필수 인용·공급자·예산 실패를 구분하고 모든 검증 시도를 보존합니다. 과거 기록은 저장된 검증 로그로 집계하되 확인할 수 없는 실패 유형은 `분류 불가`로 표시합니다. 인용 일치율은 Judge의 의미적 정확도가 아닙니다.
+
+### 일괄 실험 결과 CSV
+
+CSV는 **문제 × Round × 역할별 한 행**이며, 1 Round이면 헤더를 제외하고 90행입니다. HumanEval 번호, 역할 호출 순서로 정렬하고, 최초·복구 응답을 같은 행에 저장해 토큰을 중복 집계하지 않습니다. 선택한 배치 전체를 내려받으므로 목록의 페이지 크기나 현재 열어 둔 배치와 무관합니다.
+
+| 열 | 의미 |
+|---|---|
+| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(3), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
+| `analysis_revision`, `m4_threshold` | 다운로드 시점의 분석 설정 revision과 threshold(0~1, 미설정은 빈 값) |
+| `batch_index`, `source_task_id`, `task_sha256`, `candidate_sha256`, `run_id` | 문제 순번, 데이터·후보 식별 및 Run 연결 |
+| `mode`, `agent_model`, `judge_model`, `sandbox_mode`, `policy_hash`, `evaluation_version`, `max_requests` | 실행 당시 고정된 비교 조건 |
+| `round_index`, `role`, `call_status`, `generation_job_status`, `offline_job_status` | Round·역할별 생성과 사후 평가 진행 상태 |
+| `initial_response_text`, `recovery_response_text`, `final_response_text`, `selected_response_version` | 최초·복구·최종 선택 응답. 아직 선택되지 않은 최종 응답은 빈 값 |
+| `evaluation_phase`, `initial_*`, `recovery_*`, `final_*` | L1은 Offline, L1+L2·FULL은 Online 평가. 최초·복구·최종 선택의 종합·Lexical·적용 INFO/SCOPE/EXEC 판정, 원래 Judge 근거와 인용·실행 검증 결과 |
+| `initial_schema_valid`, `initial_evidence_valid`, `initial_validation_failure_kind` 등 | 최초·복구·최종 선택 평가의 구조화된 검증 결과. `evidence_required`로 인용 검사 대상 여부 구분. 과거 미기록 값은 빈 값 |
+| `recovery_strategy`, `recovery_feedback`, `recovery_effect` | 복구 전략, 원본 응답·확인된 위반 피드백, 응답 변경·동일 응답 재판정·평가 오류 해소의 구분 |
+| `*_judgment_resolution`, `*_uncertainty_reasons` | 서버/Judge 적용 판정·주체·충돌 및 불확실성 원인. 과거 미측정 판정 충돌은 새로 추정하지 않음 |
+| `initial_window_count`, `initial_V`, `initial_C`, `initial_U`, `initial_role_violation_rate`, `initial_decision_coverage`, `initial_warmup` | 최초 응답 기준 역할별 최근 최대 5건의 저장된 지표. 배치 전체의 비율이 아님 |
+| `agent_*`, `judge_*` | Agent와 선택 평가 단계의 Judge 요청·실패 건수, 사용량 보고 건수, 입력·출력·합계 토큰. 후속 요청·재시도·복구 포함 |
+| `started_at`, `finished_at`, `generation_duration_ms` | UTC 시각과 역할 호출 처리 시간. 온라인 평가·복구를 포함하며 L1 사후 평가 시간은 제외 |
+| `run_error`, `call_error`, `job_errors`, `request_errors`, `tool_results` | 오류와 도구 실행 결과. 구조화된 상세 값은 JSON 문자열 |
+
+대기·실패·취소된 역할도 행을 유지합니다. 미평가는 `not_evaluated`, 미생성 응답·미보고 토큰은 빈 값이며 Mock이 보고한 0토큰과 구분합니다. 일부 요청만 사용량이 있으면 알려진 합계와 `*_usage_reported_requests`를 함께 제공합니다. PostgreSQL에서는 하나의 읽기 전용 snapshot으로 조회하므로 다운로드 중 실행이 진행되어도 파일 안의 상태·결과·사용량은 같은 시점을 나타냅니다. 다운로드는 모델 호출이나 실행 상태 변경을 일으키지 않습니다.
+
+파일은 한글을 지원하는 **UTF-8 BOM CSV**입니다. 문자열의 쉼표·인용부호·줄바꿈은 CSV 규칙으로 인용하며, 스프레드시트 수식으로 해석될 수 있는 문자열 앞에는 작은따옴표를 붙입니다. 분석 시 해당 문자열의 접두사에 유의하세요.
 
 ### Mock 모델
 
@@ -146,14 +180,14 @@ docker compose run --rm --no-deps worker python /workspace/scripts/verify_sandbo
 
 | 검사 | 결과 |
 |---|---|
-| Python 로직·API·LangGraph·worker 자동 테스트 | 42개 통과. PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
+| Python 로직·API·LangGraph·worker 자동 테스트 | 89개 통과(평가 v2·feedback 복구·CSV·대시보드 회귀 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
 | 프런트엔드 토큰 집계 테스트 | 8개 통과 |
-| 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소 |
+| 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소, CSV·분석 API의 읽기 전용 조회·JSONB 사용량, 분석 설정 저장 및 `0003`·`0004` 기존 데이터 보존 |
 | TypeScript 타입 검사 및 Vite production build | 통과 |
 | Python 문법 컴파일 및 Compose 설정 검사 | 통과 |
 | 실제 PostgreSQL·PostgresSaver 연결 | 임시 PostgreSQL 통합 테스트에서 확인 |
 | Docker 앱 이미지 빌드 | 통과. 실제 sandbox 코드 실행은 이번 변경에서 재검증하지 않음 |
-| 브라우저 화면 및 실제 서버 구동 | Mock 전용 임시 환경에서 L1→L1+L2→FULL 각 30문제 완료, 새로고침·상세 이동·모바일 화면 확인 |
+| 브라우저 화면 및 실제 서버 구동 | Mock 전용 임시 환경에서 L1→L1+L2→FULL 각 30문제 완료, 새로고침·상세 이동·모바일 화면 확인. CSV 버튼 위치, 완료·실행 중 배치 다운로드, 오류 후 재시도 및 파일의 90행 검증. 대시보드 threshold 저장·유지, 초과·Min/Max의 정확한 호출 이동, Judge 실패 필터, Warmup 표시, 판정 충돌·미해결 상세 이동, 도움말과 390px 모바일 화면 확인 |
 | 실제 공급자 호출 | 미실행 |
 
 로직 검증에는 네 모드의 실제 payload 차이, lexical 통과/실패 모두 Judge 호출, 잘못된 인용 재시도, history 0/3/최근 5건과 실패 포함, FULL 복구 1회, runner 도구 재사용, offline의 생성 비변경, 예산 초과, 취소·재개, 업무 결과 저장 후 장애 재개를 포함합니다.
@@ -211,3 +245,11 @@ policies/         기본 역할 정책
 Sandbox는 네트워크 차단, 읽기 전용 root, 비특권 사용자, capability 제거, CPU·메모리·PID·시간 제한을 구성합니다. Docker socket은 executor에만 연결합니다. 실행 코드의 로그 파일에는 1 MiB 제한이 적용되며, 한도 초과는 실행 오류로 남습니다. 격리 설정의 실제 동작 확인은 위 live 검증과 배포 환경 점검이 필요합니다.
 
 구현 시 참고한 공식 자료: [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence), [Postgres checkpointer](https://pypi.org/project/langgraph-checkpoint-postgres/3.1.2/), [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling), [Docker 컨테이너 제한](https://docs.docker.com/reference/cli/docker/container/run/).
+
+### 평가 v2와 Feedback 복구
+
+새 실행은 역할별 Judge 기준, Runner 서버 검사와의 충돌 처리, 인용 검증 실패 피드백을 사용합니다. Judge 재검증과 FULL 복구는 각각 최대 한 번입니다. FULL 복구는 원본 응답과 확인된 위반을 전달하는 feedback 전략이며 도구 결과를 재사용합니다. 특정 금지 문자열은 부정·안내 문맥에서도 위반입니다.
+
+대시보드는 미해결 원인·U 원인·분모·충돌·동일 응답 재판정을 표시합니다. CSV schema v3는 미선택 복구 평가와 복구 피드백도 포함합니다. 기존 실험의 평가 버전과 reset 전략은 유지됩니다. 적용 시 `alembic upgrade head`로 nullable 컬럼을 추가하는 0004 마이그레이션을 실행합니다.
+
+구현 범위와 검증 기준: [Experiment 01 후속 개선 계획](docs/experiment01_improvement_plan_ko.md).
