@@ -60,6 +60,17 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
         assert s.scalar(select(func.count()).select_from(db.Response))==2
         assert s.scalar(select(func.count()).select_from(db.Evaluation))==2
         assert s.scalar(text('SELECT count(*) FROM checkpoint.checkpoints'))>0
+        response_hashes = list(s.scalars(select(db.Response.response_sha256).order_by(db.Response.id)))
+    # Upgrade an existing 0003 database; historical rows remain intact and unmeasured.
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE app.evaluations DROP COLUMN judgment_resolution'))
+        connection.execute(text('ALTER TABLE app.input_snapshots DROP COLUMN recovery_feedback'))
+        connection.execute(text("UPDATE alembic_version SET version_num='0003'"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')), 'head')
+    with db.transaction() as s:
+        assert list(s.scalars(select(db.Response.response_sha256).order_by(db.Response.id))) == response_hashes
+        assert all(e.judgment_resolution is None for e in s.scalars(select(db.Evaluation)))
+        assert all(x.recovery_feedback is None for x in s.scalars(select(db.Snapshot)))
     # Validate JSONB dependency matching against real PostgreSQL, including
     # L1 generation -> offline evaluation -> next problem and cancellation.
     from app.contracts import BatchCreate
@@ -72,6 +83,14 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
         batch = create_batch(s, BatchCreate(prompts_by_role={r:'perform assigned task' for r in ROLES}), 'pg-batch')
         batch_id = batch.id
         manifest = batch.manifest
+    # Existing 0002 data must survive addition of the non-null settings column.
+    with engine.begin() as connection:
+        connection.execute(text('ALTER TABLE app.batches DROP COLUMN analysis_settings'))
+        connection.execute(text("UPDATE alembic_version SET version_num='0002'"))
+    command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')), 'head')
+    with db.transaction() as s:
+        assert s.get(db.Batch, batch_id).analysis_settings == {}
+        assert len(s.get(db.Batch, batch_id).manifest) == 30
     with postgres_checkpointer() as saver:
         agent, offline = graphs.agent_graph(saver), graphs.offline_graph(saver)
         for index, kind in [(0, 'run'), (0, 'offline'), (1, 'run')]:

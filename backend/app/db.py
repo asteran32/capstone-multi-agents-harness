@@ -51,6 +51,7 @@ class Batch(Base):
     manifest: Mapped[list] = mapped_column(J)
     source_batch_id: Mapped[str | None] = mapped_column(ForeignKey('app.batches.id'), nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(default=False)
+    analysis_settings: Mapped[dict] = mapped_column(J, default=dict, server_default='{}')
 
 
 class Run(Base):
@@ -93,6 +94,7 @@ class Snapshot(Base):
     parent_snapshot_id: Mapped[str | None] = mapped_column(ForeignKey('app.input_snapshots.id'))
     reset_reason: Mapped[str | None] = mapped_column(Text)
     content_sha256: Mapped[str] = mapped_column(String(64))
+    recovery_feedback: Mapped[dict | None] = mapped_column(J, nullable=True)
 
 
 class Response(Base):
@@ -119,6 +121,7 @@ class Evaluation(Base):
     execution_evidence: Mapped[dict | None] = mapped_column(J, nullable=True)
     aggregate_verdict: Mapped[str | None] = mapped_column(Text)
     metric_snapshot: Mapped[dict | None] = mapped_column(J, nullable=True)
+    judgment_resolution: Mapped[dict | None] = mapped_column(J, nullable=True)
 
 
 class ModelRequest(Base):
