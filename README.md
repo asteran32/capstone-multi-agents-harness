@@ -48,6 +48,7 @@ make down
 | History | 동일 run·role의 이전 종료 작업 최대 5건, 실패 포함, 실제 입력 snapshot 고정 |
 | 지표 | 최초 응답 기준 최근 5회 M1~M4, V/C/U, coverage, warmup, null 및 disabled 구분 |
 | 사후 평가 | 종료된 Base/L1 출력만 offline 평가, 생성·도구·복구 실행 없음 |
+| 저장 응답 재평가 | 종료된 배치의 초기·복구 응답 고정, 사람의 기대 판정 검토, 합성 위반 사례, 새 평가 버전·별도 예산·결과 CSV, 검증 후 모드/Round/복구 전략 비교 |
 | 기록 | 실제 API payload, 모든 Judge 시도, 인용 검증, 도구 결과, 노드 로그 및 상세 조회 |
 | 웹 | Overview 개요·목적·아키텍처 그래프, 설정 패널, 세로 3개 역할 출력과 우측 평가, 최초·복구 전환, run 및 call 필터 |
 | 정책 | YAML/JSON 가져오기·편집·검증·파일 저장, 실행별 원문·설정·버전·해시 고정 |
@@ -92,6 +93,33 @@ make down
 생성·재실행 API는 `Idempotency-Key`가 필요하며 기존과 같은 인증을 사용합니다. `0002` migration이 `app.batches`를 추가합니다. 기존 환경은 `./start.sh`로 새 코드·화면과 migration을 반영하세요. 이 기능 추가만으로 실제 모델 실험을 자동 실행하지는 않습니다.
 
 `0003` migration은 기존 배치에 분석 설정을 추가합니다. Judge 검증은 새 실행부터 schema·필수 인용·공급자·예산 실패를 구분하고 모든 검증 시도를 보존합니다. 과거 기록은 저장된 검증 로그로 집계하되 확인할 수 없는 실패 유형은 `분류 불가`로 표시합니다. 인용 일치율은 Judge의 의미적 정확도가 아닙니다.
+
+### 저장 응답 재평가
+
+배치의 **저장 응답 재평가 → 재평가 준비·기록 열기**에서 다음 순서로 진행합니다. 준비·검토만으로 실제 모델을 호출하지 않습니다.
+
+1. 종료된 배치에서 **검증 세트 준비**를 누릅니다. 초기·복구 응답 전체와 정상/위반 합성 사례를 고정하고, 정책·Judge·출력 한도로 평가 버전을 만듭니다. Experiment 01은 저장 응답 132개이며 기본 정책의 합성 사례는 12개입니다.
+2. 역할 정책·원문·실행 증거를 확인하고 사례별 기대 C/V/U, 근거, 검토자를 저장합니다. 합성 사례의 제안도 검토가 필요합니다. 모든 사례와 정책을 확인한 뒤 **검토 확정**을 누릅니다.
+3. **재평가 실행**을 누르면 Judge만 호출하는 별도 작업이 등록됩니다. 원본 응답·선택 결과·M4·L3는 유지됩니다. 고정된 요청 한도 안에서 검증/전송 재시도는 각각 최대 한 번이며, 중단 시 저장된 공급자 응답을 재사용합니다. 완료된 오류를 다시 측정하려면 새 재평가 실행을 만드세요.
+4. 동일 저장 사례의 FP/FPR·FN·탐지율·U·오류와 역할별 혼동 행렬, 합성 사례 일치, schema/evidence 실패를 확인합니다. **Judge 요청·응답 로그 보기**와 **재평가 결과 CSV 다운로드**로 근거를 분석합니다. 기대 U는 이진 지표에서 제외하고, 평가 오류를 준수로 계산하지 않습니다.
+5. 실제 Judge의 완료 결과가 검증 기준을 충족하면 **같은 평가 기준으로 비교 실험 시작**에서 L1/L1+L2/FULL을 생성합니다. Round 조건(최대 3개)을 분리하고, 필요하면 FULL의 feedback/reset/retry를 비교합니다. reset/retry는 피드백 없이 이력을 각각 제거/유지하는 대조 조건입니다. Mock는 품질 검증 통과 근거로 사용하지 않습니다.
+
+새 작업은 `0005`의 별도 검토·재평가·요청 테이블에 저장됩니다. 기존 `/runs/{id}/evaluate`는 원래 Base/L1 사후 평가로 유지됩니다. 재평가에는 기존 Run당 예산 대신 **재평가 실행 전체의 전용 요청 예산**을 적용합니다. 예를 들어 132개 응답 + 12개 합성 사례는 기본 144회, 재시도 포함 최대 576회입니다(설정한 전체 예산 이내). 실제 모델 실행은 버튼을 눌렀을 때만 시작합니다.
+
+| API | 용도 |
+|---|---|
+| `GET/POST /api/batches/{id}/review-sets` | 검증 세트 목록 / 준비 |
+| `GET /api/review-sets/{id}` | 고정 입력·정책·기대 판정·실행 이력 |
+| `PUT /api/review-sets/{id}/cases/{case_id}/label` | revision을 확인하여 사람의 검토 저장 |
+| `POST /api/review-sets/{id}/seal` | 모든 사례와 정책 검토 확정 |
+| `POST /api/review-sets/{id}/execute` | 새 Judge 재평가 접수 |
+| `GET /api/reevaluations/{id}` | 진행률·판정·검증 지표 |
+| `GET /api/reevaluations/{id}/cases/{case_id}` | 사례별 Judge 요청·응답 감사 로그 |
+| `POST /api/reevaluations/{id}/cancel`, `/resume` | 중단 / 미완료 작업 재개 |
+| `GET /api/reevaluations/{id}/results.csv` | 고정 사례당 한 행의 결과 CSV |
+| `POST /api/reevaluations/{id}/comparisons/start` | 검증된 평가 기준으로 모드·Round·복구 전략별 신규 배치 생성 |
+
+준비·실행·후속 비교 접수는 `Idempotency-Key`가 필요합니다. 검증 기준과 분모는 [저장 응답 검증 계획](docs/stored_response_validation_plan_ko.md)에 정리했습니다.
 
 ### 일괄 실험 결과 CSV
 
@@ -180,7 +208,7 @@ docker compose run --rm --no-deps worker python /workspace/scripts/verify_sandbo
 
 | 검사 | 결과 |
 |---|---|
-| Python 로직·API·LangGraph·worker 자동 테스트 | 89개 통과(평가 v2·feedback 복구·CSV·대시보드 회귀 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
+| Python 로직·API·LangGraph·worker 자동 테스트 | 100개 통과(평가 v2·feedback 복구·CSV·대시보드·재평가·이력 대조군 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
 | 프런트엔드 토큰 집계 테스트 | 8개 통과 |
 | 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소, CSV·분석 API의 읽기 전용 조회·JSONB 사용량, 분석 설정 저장 및 `0003`·`0004` 기존 데이터 보존 |
 | TypeScript 타입 검사 및 Vite production build | 통과 |
@@ -230,8 +258,10 @@ backend/app/
   providers.py    mock 및 OpenAI adapter
   evaluation.py   lexical·인용·실행 근거·지표 계산
   worker.py       PostgreSQL queue, lease, checkpoint 재개
-  db.py           12개 업무 테이블
+  db.py           실험·검토·재평가 업무 테이블
   batches.py      정답 30문제 manifest, 순차 접수, 진행 집계·취소
+  reevaluation*.py 고정 검증 세트, 사람 검토, Judge 전용 재평가·지표·API
+  validation_cases.py 합성 정상/위반 사례와 미검토 기대 판정 제안
 sandbox/          executor와 격리된 pytest wrapper
 frontend/src/     실행 화면과 대시보드
 data/             원본 30문제(0~29), 출처 해시, 라이선스
