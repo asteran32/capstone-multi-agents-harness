@@ -6,6 +6,7 @@ import {TokenUsage} from './TokenUsageDisplay';
 import {Overview} from './Overview';
 import {BatchWorkspace} from './BatchWorkspace';
 import './style.css';
+import {causeNames} from './assessmentLabels';
 
 const modes:Mode[]=['Base','L1','L1+L2','FULL'];
 const defaults:Record<Role,string>={problem_designer:'선택된 문제를 정답 없이 설명해줘',code_reviewer:'제공된 코드가 요구사항을 충족하는지 검토해줘',test_runner:'원본 테스트를 실행하고 결과를 JSON으로 반환해줘'};
@@ -50,10 +51,13 @@ function Metrics({ev,initial,requests,phase}:{ev:Dict|undefined,initial?:Dict,re
  const tokens=<TokenUsage requests={requests} phase={phase} judgeDisabled={ev?.status==='disabled'}/>;
  if(!ev)return <div className={'metrics'+(requests?.length?'':' empty-metrics')}><span className="eyebrow">ASSESSMENT</span><p className="muted">응답 평가를 기다립니다.</p>{tokens}</div>;
  const m=ev.metric_snapshot||initial?.metric_snapshot;
+ const applied=ev.judgment_resolution?.effective_rules||ev.judge_result;
  return <div className="metrics"><div className="metric-heading"><span className="eyebrow">{ev.phase==='offline'?'OFFLINE':'ONLINE'} · M3</span><Badge value={ev.status==='disabled'?'disabled':ev.aggregate_verdict}/></div>
  {ev.status==='disabled'?<><p className="muted">이 모드의 온라인 평가는 비활성입니다. 종료 후 저장된 출력을 평가할 수 있습니다.</p>{tokens}</>:<>
  <div className="metric-line"><span>Lexical · M2</span><span>{ev.lexical_result?.match_count??'—'} matches</span><Badge value={ev.lexical_result?.verdict}/></div>
- {['INFO','SCOPE','EXEC'].map(k=><details className="rule" key={k}><summary><span>{k}{k==='INFO'?' · M1':''}</span><Badge value={ev.judge_result?.[k]?.verdict}/></summary><p>{ev.judge_result?.[k]?.reason||'평가 중'}</p>{ev.judge_result?.[k]?.evidence&&<blockquote>{ev.judge_result[k].evidence}</blockquote>}</details>)}
+ {['INFO','SCOPE','EXEC'].map(k=><details className="rule" key={k}><summary><span>{k}{k==='INFO'?' · M1':''}{applied?.[k]?.authority==='server'?' · 서버 적용':''}</span><Badge value={applied?.[k]?.verdict}/></summary><p>{applied?.[k]?.reason||'평가 중'}</p><p>원래 Judge 판정: {labels[ev.judge_result?.[k]?.verdict]||'—'} · {ev.judge_result?.[k]?.reason}</p>{ev.judge_result?.[k]?.evidence&&<blockquote>{ev.judge_result[k].evidence}</blockquote>}</details>)}
+ {ev.judgment_resolution?.conflicts?.length>0&&<Raw title={`서버–Judge 충돌 ${ev.judgment_resolution.conflicts.length}건 · 적용 근거`} value={ev.judgment_resolution.conflicts}/>}
+ {ev.aggregate_verdict==='uncertain'&&ev.judgment_resolution&&<p className="window-note">불확실 원인: {ev.judgment_resolution.uncertainty_reasons.map((key:string)=>causeNames[key]||key).join(' · ')}</p>}
  <div className="metric-numbers" title="최초 응답 기준 최근 창"><div><small>위반율 · M4</small><strong>{percent(m?.role_violation_rate)}</strong></div><div><small>Decision coverage</small><strong>{percent(m?.decision_coverage)}</strong></div></div>
  {tokens}
  <p className="window-note">{m?`최근 ${m.window_count}/5회 · V ${m.V} / C ${m.C} / U ${m.U}${m.warmup?' · Warmup':''}`:'복구 응답은 최근 창에 추가하지 않습니다.'}</p>
@@ -70,7 +74,7 @@ function AgentRow({role,index,call,phase,onInspect}:{role:Role,index:number,call
  <div className="output-toolbar"><span>{['문제 설명 및 가이드라인','요구사항 기반 정적 검토','원본 테스트 실행 보고'][index]}</span>{(call?.responses?.length||0)>1&&<div className="mini-tabs">{[0,1].map(v=><button key={v} className={version===v?'active':''} onClick={()=>setVersion(v)}>{v?'복구':'최초'}</button>)}</div>}</div>
  {response?<pre className="response-text">{response.raw_text}</pre>:<div className="output-placeholder"><span className={call?.status==='running'?'working':''}>↳</span><p>{call?.status==='running'?'응답을 생성하고 있습니다.':'실행 결과가 여기에 표시됩니다.'}</p></div>}
  {recovery&&<div className="recovery-line"><span>최초</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)?.aggregate_verdict}/><span>→ 복구</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===1)?.id)?.aggregate_verdict}/><span>지표는 최초 응답 기준</span></div>}{call?.error&&<p className="error">{call.error.message||call.error.code}</p>}
- <div className="output-footer"><span>History {original?.ordered_history?.length??0}/5{recovery?' → 0 (reset)':''}</span>{call?.tools?.[0]?.result&&<span>코드 테스트 <Badge value={call.tools[0].result.status}/></span>}{call&&<button className="text-button" onClick={()=>onInspect(call.id)}>상세 기록 ↗</button>}</div>
+ <div className="output-footer"><span>History {original?.ordered_history?.length??0}/5{recovery?` → 0 (${recovery.recovery_feedback?'feedback':'reset'})`:''}</span>{call?.tools?.[0]?.result&&<span>코드 테스트 <Badge value={call.tools[0].result.status}/></span>}{call&&<button className="text-button" onClick={()=>onInspect(call.id)}>상세 기록 ↗</button>}</div>
  </div><Metrics ev={ev} initial={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)} requests={call?.requests} phase={phase}/></section>
 }
 
@@ -80,7 +84,7 @@ function Inspector({id,onClose}:{id:string,onClose:()=>void}) {
  useEffect(()=>{api<Call>(`/calls/${id}`).then(setCall).catch(e=>setError(String(e)));load(0)},[id]);
  useEffect(()=>{const fn=(e:KeyboardEvent)=>{if(e.key==='Escape')onClose()};window.addEventListener('keydown',fn);return()=>window.removeEventListener('keydown',fn)},[onClose]);
  return <div className="overlay" onClick={onClose}><section className="inspector" role="dialog" aria-modal="true" aria-label="호출 상세 기록" onClick={e=>e.stopPropagation()}><header><div><span className="eyebrow">CALL RECORD</span><h2>{call?names[call.role]:'불러오는 중…'}</h2></div><button autoFocus aria-label="상세 닫기" onClick={onClose}>닫기 ×</button></header>{error&&<p className="error">{error}</p>}{call&&<><p className="mono muted">{call.id}</p><Raw title="호출 상태와 최종 선택" value={{status:call.status,selected_response_id:call.selected_response_id,error:call.error}}/>
- <Raw title="입력 및 History snapshot · 최초 / 복구" value={call.snapshots}/><Raw title="모든 모델 요청 · Judge 시도 포함" value={call.requests}/><Raw title="응답 원문 · 형식 오류" value={call.responses}/><Raw title="Lexical · Judge · 인용 검증 · 지표 창" value={call.evaluations}/><Raw title="실제 도구 결과 · stdout · stderr · JUnit" value={call.tools}/><h3>실행 타임라인</h3><div className="timeline">{logs.map(l=><details key={l.id}><summary><span className="mono">{l.event_seq.toString().padStart(3,'0')}</span><span>{l.node_name}</span><Badge value={l.status}/></summary><pre>{pretty({time:l.created_at,layer:l.layer,operation_key:l.operation_key,...l.details})}</pre></details>)}</div>{more&&<button onClick={()=>load(after)}>로그 더 보기</button>}</>}</section></div>
+ <Raw title="입력 및 History snapshot · 최초 / 복구 feedback" value={call.snapshots}/><Raw title="모든 모델 요청 · Judge 시도 포함" value={call.requests}/><Raw title="응답 원문 · 형식 오류" value={call.responses}/><Raw title="Lexical · Judge 원문 · 적용 판정 · 충돌 · 인용 검증 · 지표 창" value={call.evaluations}/><Raw title="실제 도구 결과 · stdout · stderr · JUnit" value={call.tools}/><h3>실행 타임라인</h3><div className="timeline">{logs.map(l=><details key={l.id}><summary><span className="mono">{l.event_seq.toString().padStart(3,'0')}</span><span>{l.node_name}</span><Badge value={l.status}/></summary><pre>{pretty({time:l.created_at,layer:l.layer,operation_key:l.operation_key,...l.details})}</pre></details>)}</div>{more&&<button onClick={()=>load(after)}>로그 더 보기</button>}</>}</section></div>
 }
 
 function Dashboard({onSelect}:{onSelect:(id:string)=>void}) {
@@ -120,7 +124,7 @@ function Dashboard({onSelect}:{onSelect:(id:string)=>void}) {
 }
 
 function Workspace({config,runId,onRun,onError}:{config:Dict,runId:string,onRun:(id:string)=>void,onError:(s:string)=>void}) {
- const [run,setRun]=useState<Run|null>(null),[calls,setCalls]=useState<Call[]>([]),[round,setRound]=useState(1),[phase,setPhase]=useState<EvaluationPhase>('online'),[inspected,setInspected]=useState(''),[allCalls,setAllCalls]=useState<Call[]>([]),[roleFilter,setRoleFilter]=useState(''),[verdictFilter,setVerdictFilter]=useState(''),[pollToken,setPollToken]=useState(0);
+ const [run,setRun]=useState<Run|null>(null),[calls,setCalls]=useState<Call[]>([]),[round,setRound]=useState(1),[phase,setPhase]=useState<EvaluationPhase>('online'),[inspected,setInspected]=useState(new URLSearchParams(location.search).get('call')||''),[allCalls,setAllCalls]=useState<Call[]>([]),[roleFilter,setRoleFilter]=useState(''),[verdictFilter,setVerdictFilter]=useState(''),[pollToken,setPollToken]=useState(0);
  const refresh=useCallback(async()=>{if(!runId)return;const [r,c]=await Promise.all([api<Run>(`/runs/${runId}`),api<{items:Call[]}>(`/runs/${runId}/calls?phase=${phase}`)]);setRun(r);setAllCalls(c.items);const selected=c.items.filter(x=>x.round_index===round);setCalls(await Promise.all(selected.map(x=>api<Call>(`/calls/${x.id}`))));return r},[runId,round,phase]);
  useEffect(()=>{let active=true;let timer:ReturnType<typeof setTimeout>;const tick=async()=>{try{const r=await refresh();if(active&&r&&(!terminal.includes(r.status)||r.jobs.some(j=>['queued','running'].includes(j.status))))timer=setTimeout(tick,1500)}catch(e){if(active)onError(String(e))}};tick();return()=>{active=false;clearTimeout(timer)}},[refresh,pollToken]);
  useEffect(()=>{setRound(1);setRun(null);setCalls([]);setAllCalls([]);setPhase('online')},[runId]);
@@ -138,7 +142,7 @@ function App(){
  const [logged,setLogged]=useState(!!sessionStorage.getItem('guardrail-auth')),[config,setConfig]=useState<Dict|null>(null),[tab,setTab]=useState(new URLSearchParams(location.search).get('batch')?'batch':new URLSearchParams(location.search).get('run')?'workspace':'overview'),[runId,setRunId]=useState(new URLSearchParams(location.search).get('run')||''),[batchId,setBatchId]=useState(new URLSearchParams(location.search).get('batch')||''),[error,setError]=useState('');
  useEffect(()=>{const fn=()=>{setLogged(false);setConfig(null)};window.addEventListener('auth-expired',fn);return()=>window.removeEventListener('auth-expired',fn)},[]);
  useEffect(()=>{if(logged)api<Dict>('/config').then(setConfig).catch(e=>setError(String(e)))},[logged]);
- const select=(id:string)=>{setRunId(id);setTab('workspace');history.replaceState({},'',id?'?run='+id:location.pathname)};
+ const select=(id:string,callId?:string)=>{setRunId(id);setTab('workspace');history.replaceState({},'',id?'?run='+id+(callId?'&call='+callId:''):location.pathname)};
  const selectBatch=(id:string)=>{setBatchId(id);setTab('batch');history.replaceState({},'',id?'?batch='+id:location.pathname)};
  const navigate=(next:'overview'|'workspace'|'dashboard'|'batch')=>{setTab(next);history.replaceState({},'',next==='batch'&&batchId?'?batch='+batchId:next==='workspace'&&runId?'?run='+runId:location.pathname)};
  if(!logged)return <Login onLogin={()=>setLogged(true)}/>;

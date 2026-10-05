@@ -49,7 +49,9 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None):
     config = body.model_dump(mode='json')
     config['policy_raw'] = body.policy_raw if body.policy_raw is not None else DEFAULT_POLICY.read_text()
     batch = Batch(id=uid(), idempotency_key=key, creation_request_sha256=request_hash,
-                  config_snapshot=config, manifest=[], source_batch_id=source.id if source else None)
+                  config_snapshot=config, manifest=[], source_batch_id=source.id if source else None,
+                  analysis_settings={'m4_threshold': source.analysis_settings.get('m4_threshold'), 'revision': 0}
+                      if source else {})
     s.add(batch)
     s.flush()
     manifest, previous_key = [], None

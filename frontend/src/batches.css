@@ -13,6 +13,8 @@
 .batch-rerun h2{font-size:16px;margin-bottom:6px}
 .batch-rerun p{margin:0}.batch-rerun label{margin:0;min-width:110px}
 .batch-archive{margin-top:44px}.batch-archive h2{margin:0;font-size:18px}
+.batch-row-actions{display:flex;align-items:center;gap:14px;white-space:nowrap}
+.batch-row-actions button:disabled{opacity:.55;cursor:wait}
 .batch-workspace .table-scroll table{min-width:640px}
 .badge.completed_with_errors{background:#f7f0df;color:#977931}
 @media(max-width:600px){.batch-workspace .setup form{display:block}.topbar nav{gap:10px}.topbar{gap:14px}.batch-rerun .primary{width:100%}}

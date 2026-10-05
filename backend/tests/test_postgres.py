@@ -105,4 +105,28 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
             assert batch_summary(s, batch)['finished_runs'] == 1
             cancel_batch(s, batch)
     assert claim() is None
+    # Exercise the export's read-only repeatable-read transaction and JSONB usage projection.
+    import csv
+    import io
+    from fastapi.testclient import TestClient
+    from app.api import app
+    client = TestClient(app)
+    client.auth = ('researcher', 'test-password')
+    analytics = client.get(f'/api/batches/{batch_id}/analytics')
+    assert analytics.status_code == 200, analytics.text
+    assert analytics.json()['progress']['planned'] == 90
+    assert analytics.json()['threshold']['warmup'] == 3
+    assert analytics.json()['judge']['schema_checks'] == 3
+    updated = client.put(f'/api/batches/{batch_id}/analysis-settings', json={'revision': 0, 'm4_threshold': .2})
+    assert updated.status_code == 200 and updated.json()['revision'] == 1
+    exported = client.get(f'/api/batches/{batch_id}/results.csv')
+    assert exported.status_code == 200, exported.text
+    rows = list(csv.DictReader(io.StringIO(exported.content.decode('utf-8-sig'))))
+    assert len(rows) == 90
+    assert {r['batch_status'] for r in rows} == {'cancelled'}
+    assert rows[0]['evaluation_phase'] == 'offline' and rows[0]['initial_verdict'] == 'compliant'
+    assert rows[0]['agent_total_tokens'] == rows[0]['judge_total_tokens'] == '0'
+    assert rows[-1]['call_status'] == 'cancelled' and rows[-1]['agent_total_tokens'] == ''
+    assert rows[0]['csv_schema_version'] == '3' and rows[0]['m4_threshold'] == '0.2'
+    assert rows[0]['analysis_revision'] == '1' and rows[0]['initial_schema_valid'] == 'true'
     engine.dispose()

@@ -120,6 +120,11 @@ class BatchRerun(Strict):
     mode: Literal['L1', 'L1+L2', 'FULL']
 
 
+class BatchAnalysisUpdate(Strict):
+    m4_threshold: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    revision: int = Field(ge=0)
+
+
 class Rule(Strict):
     verdict: Verdict
     reason: str = Field(min_length=1)

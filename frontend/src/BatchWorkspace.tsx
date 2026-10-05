@@ -1,6 +1,7 @@
 import {useEffect, useRef, useState} from 'react';
-import {api, post} from './api';
+import {api, downloadCsv, post} from './api';
 import {Batch, Dict, ExperimentMode, Role, names, roles} from './types';
+import {BatchAnalytics} from './BatchAnalytics';
 import './batches.css';
 
 const modes: ExperimentMode[] = ['L1', 'L1+L2', 'FULL'];
@@ -11,7 +12,7 @@ function Status({value}: {value:string}) {return <span className={'badge '+value
 type RequestKey = {fingerprint:string; key:string}|null;
 
 export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
- config:Dict; batchId:string; onBatch:(id:string)=>void; onRun:(id:string)=>void; onError:(error:string)=>void;
+ config:Dict; batchId:string; onBatch:(id:string)=>void; onRun:(id:string,callId?:string)=>void; onError:(error:string)=>void;
 }) {
  const [mode,setMode]=useState<ExperimentMode>('L1'), [rounds,setRounds]=useState(1);
  const [agent,setAgent]=useState('mock'), [judge,setJudge]=useState('mock'), [budget,setBudget]=useState(1000);
@@ -19,6 +20,8 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
  const [batch,setBatch]=useState<Batch|null>(null), [archive,setArchive]=useState<{items:Batch[];total:number}>({items:[],total:0});
  const [offset,setOffset]=useState(0), [reload,setReload]=useState(0), [busy,setBusy]=useState(false), [loading,setLoading]=useState(false);
  const [rerunMode,setRerunMode]=useState<ExperimentMode>('L1+L2');
+ const [downloading,setDownloading]=useState<string[]>([]);
+ const downloadIds=useRef(new Set<string>());
  const createKey=useRef<RequestKey>(null), rerunKey=useRef<RequestKey>(null);
 
  useEffect(()=>{
@@ -54,6 +57,14 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
  }
  const estimated=30*rounds*(mode==='L1'?(evaluate?7:4):7);
 
+ async function download(id:string) {
+  if(downloadIds.current.has(id))return;
+  downloadIds.current.add(id);setDownloading([...downloadIds.current]);
+  try {await downloadCsv(`/batches/${id}/results.csv`,`guardrail-batch-${id}.csv`)}
+  catch(e) {onError(String(e))}
+  finally {downloadIds.current.delete(id);setDownloading([...downloadIds.current])}
+ }
+
  return <div className="workspace batch-workspace">
   <aside className="setup">
    <div className="section-title"><span className="eyebrow">BATCH EXPERIMENT</span><h2>정답 30문제 일괄 실행</h2><p className="muted">HumanEval/0–29의 정답 후보를 번호순으로 실행합니다. 각 문제의 이력은 독립적입니다.</p></div>
@@ -81,6 +92,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
      {batch.source_batch_id&&<button className="text-button" onClick={()=>onBatch(batch.source_batch_id!)}>원본 일괄 실행 보기 →</button>}
      {!finished.includes(batch.status)&&<button disabled={busy||batch.status==='cancel_requested'} onClick={async()=>{setBusy(true);try{await post(`/batches/${batch.id}/cancel`);setReload(x=>x+1)}catch(e){onError(String(e))}finally{setBusy(false)}}}>남은 실행 취소</button>}
     </section>
+    <BatchAnalytics key={batch.id} batchId={batch.id} onInspect={onRun}/>
     <section className="batch-rerun" aria-label="모드를 바꿔 다시 실행">
      <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·정답 후보·모델·정책·요청·Round를 유지하고 새 기록을 만듭니다.</p></div>
      <label>새 실험 모드<select value={rerunMode} onChange={e=>setRerunMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
@@ -92,8 +104,9 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
     <p className="comparison-note">브라우저를 닫아도 서버에서 계속 실행합니다. 오류는 기록하고 다음 문제로 넘어갑니다. 취소는 진행 중인 요청이 반환된 뒤 적용됩니다.</p>
    </>:<div className="empty-state"><h3>L1 기준선부터 시작하세요</h3><p>왼쪽에서 모델과 Round를 설정하면 정답 후보 30개의 실행이 접수됩니다.</p></div>}
    <section className="batch-archive"><div className="page-heading"><h2>일괄 실행 기록</h2><span className="muted">{archive.total} batches</span></div>
+    <p className="muted">결과 CSV · 문제·Round·역할별 결과와 토큰 사용량. 실행 중이면 현재 저장된 결과까지 포함합니다.</p>
     <div className="table-scroll"><table><thead><tr><th>시작 시각</th><th>모드</th><th>모델</th><th>진행</th><th>상태</th><th></th></tr></thead><tbody>{archive.items.map(item=><tr key={item.id}>
-     <td>{new Date(item.created_at).toLocaleString('ko-KR')}<small>{item.id.slice(0,8)}</small></td><td>{item.mode}</td><td>{item.config_snapshot.agent_model}<small>Judge · {item.config_snapshot.judge_model}</small></td><td>{item.finished_runs} / {item.total_runs}</td><td><Status value={item.status}/></td><td><button className="text-button" onClick={()=>onBatch(item.id)}>열기 →</button></td>
+     <td>{new Date(item.created_at).toLocaleString('ko-KR')}<small>{item.id.slice(0,8)}</small></td><td>{item.mode}</td><td>{item.config_snapshot.agent_model}<small>Judge · {item.config_snapshot.judge_model}</small></td><td>{item.finished_runs} / {item.total_runs}</td><td><Status value={item.status}/></td><td><div className="batch-row-actions"><button className="text-button" onClick={()=>onBatch(item.id)}>열기 →</button><button className="text-button" disabled={downloading.includes(item.id)} aria-busy={downloading.includes(item.id)} onClick={()=>download(item.id)}>{downloading.includes(item.id)?'다운로드 중…':'결과 다운로드'}</button></div></td>
     </tr>)}</tbody></table></div>
     {!archive.items.length&&<p className="muted">저장된 일괄 실행이 없습니다.</p>}
     <div className="pagination"><button disabled={!offset} onClick={()=>setOffset(x=>x-10)}>← 이전</button><button disabled={offset+10>=archive.total} onClick={()=>setOffset(x=>x+10)}>다음 →</button></div>

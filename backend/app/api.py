@@ -6,7 +6,7 @@ from typing import Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response as HTTPResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -14,11 +14,13 @@ from sqlalchemy import select, func, text
 from sqlalchemy.exc import IntegrityError
 
 from .config import settings
-from .contracts import RunCreate, BatchCreate, BatchRerun, parse_policy, digest, ROLES, TERMINAL
+from .contracts import RunCreate, BatchCreate, BatchRerun, BatchAnalysisUpdate, parse_policy, digest, ROLES, TERMINAL
 from .db import (transaction, record, Batch, Run, Call, Task, Candidate, Job, Snapshot,
                  Response, Evaluation, ModelRequest, ToolExecution, Log, now)
 from .services import create_run, Conflict, DEFAULT_POLICY
 from .batches import create_batch, batch_summary, cancel_batch
+from .exports import batch_results_csv
+from .batch_analytics import batch_analytics, analysis_settings
 
 app = FastAPI(title='Guardrail Lab', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None)
 basic = HTTPBasic(auto_error=False)
@@ -196,6 +198,42 @@ def batches(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
 def batch_detail(id: UUID):
     with transaction() as s:
         return batch_summary(s, require(s, Batch, id), detail=True)
+
+
+@app.get('/api/batches/{id}/results.csv', dependencies=[Depends(authenticate)])
+def batch_results(id: UUID):
+    with transaction() as s:
+        if s.get_bind().dialect.name == 'postgresql':
+            # Progress, evaluations and usage must describe the same database snapshot.
+            s.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'))
+        content, filename = batch_results_csv(s, require(s, Batch, id))
+    return HTTPResponse(content, media_type='text/csv; charset=utf-8',
+                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+
+@app.get('/api/batches/{id}/analytics', dependencies=[Depends(authenticate)])
+def batch_analysis(id: UUID):
+    with transaction() as s:
+        if s.get_bind().dialect.name == 'postgresql':
+            s.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY'))
+        return batch_analytics(s, require(s, Batch, id))
+
+
+@app.put('/api/batches/{id}/analysis-settings', dependencies=[Depends(authenticate)])
+def update_batch_analysis(id: UUID, body: BatchAnalysisUpdate):
+    with transaction() as s:
+        batch = s.scalar(select(Batch).where(Batch.id == str(id)).with_for_update())
+        if not batch:
+            raise HTTPException(404, '기록을 찾을 수 없습니다.')
+        current = analysis_settings(batch)
+        if body.revision != current['revision']:
+            raise HTTPException(409, '분석 설정이 변경되었습니다. 새로고침 후 다시 저장하세요.')
+        if body.m4_threshold != current['m4_threshold']:
+            change = {'m4_threshold': body.m4_threshold, 'revision': current['revision'] + 1,
+                      'updated_at': now().isoformat()}
+            batch.analysis_settings = {**change, 'history': [*current['history'],
+                {key: current[key] for key in ('m4_threshold', 'revision', 'updated_at')}]}
+        return analysis_settings(batch)
 
 
 @app.post('/api/batches/{id}/rerun', status_code=202, dependencies=[Depends(authenticate)])

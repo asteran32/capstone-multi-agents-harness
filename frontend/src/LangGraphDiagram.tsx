@@ -23,7 +23,7 @@ const nodes:FlowNode[] = [
  {id:'V',lines:['Validate schema and evidence'],x:480,y:895,width:320,height:70},
  {id:'M',lines:['Aggregate and persist metrics'],x:480,y:1010,width:320,height:70},
  {id:'R',lines:['FULL and violated','and recovery unused?'],x:480,y:1140,width:350,height:130,shape:'decision'},
- {id:'C',lines:['Persist reset context and','increment recovery count'],x:820,y:1140,width:280,height:90},
+ {id:'C',lines:['Persist recovery feedback','and reset history (v2)'],x:820,y:1140,width:280,height:90},
  {id:'F',lines:['Select final result and finish'],x:480,y:1290,width:320,height:60,shape:'terminal'},
 ];
 
