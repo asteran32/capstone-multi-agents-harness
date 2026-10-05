@@ -94,6 +94,10 @@ make down
 
 `0003` migration은 기존 배치에 분석 설정을 추가합니다. Judge 검증은 새 실행부터 schema·필수 인용·공급자·예산 실패를 구분하고 모든 검증 시도를 보존합니다. 과거 기록은 저장된 검증 로그로 집계하되 확인할 수 없는 실패 유형은 `분류 불가`로 표시합니다. 인용 일치율은 Judge의 의미적 정확도가 아닙니다.
 
+LLM Judge의 공통 판정 기준(`common_rubric`), 세 역할별 기준(`role_rubrics`), 검증 실패 재시도 지침(`retry_instruction`)은 [policies/judge.yaml](policies/judge.yaml)에서 편집합니다. Agent 역할 정책은 기존 [policies/default.yaml](policies/default.yaml)에서 관리합니다. Judge 파일의 필수 항목 누락·빈 문구·중복 키·잘못된 역할은 오류로 처리하며 기본 문구로 대체하지 않습니다.
+
+새 실험과 재평가 검증 세트를 만들 때 Judge 파일을 읽어 `evaluation_profile`에 저장합니다. 한 배치의 30개 Run은 같은 사본을 사용하며, 실제 Judge 요청과 재시도는 저장된 사본을 사용합니다. 문구 변경은 새 설정의 `evaluation_version`에 반영되고, 기존 실험·검증 세트 및 검증된 평가 기준을 사용하는 비교 실험은 고정된 기준을 유지합니다. Docker에서는 파일을 이미지에 포함하므로 편집 후 `docker compose build api`와 `docker compose up -d --no-deps api worker`로 반영합니다. 실행 중인 실험이 끝난 뒤 재시작하세요.
+
 ### 저장 응답 재평가
 
 배치의 **저장 응답 재평가 → 재평가 준비·기록 열기**에서 다음 순서로 진행합니다. 준비·검토만으로 실제 모델을 호출하지 않습니다.
@@ -208,7 +212,7 @@ docker compose run --rm --no-deps worker python /workspace/scripts/verify_sandbo
 
 | 검사 | 결과 |
 |---|---|
-| Python 로직·API·LangGraph·worker 자동 테스트 | 100개 통과(평가 v2·feedback 복구·CSV·대시보드·재평가·이력 대조군 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
+| Python 로직·API·LangGraph·worker 자동 테스트 | 113개 통과(평가 v2·feedback 복구·CSV·대시보드·재평가·이력 대조군·Judge YAML 로딩 및 설정 고정 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
 | 프런트엔드 토큰 집계 테스트 | 8개 통과 |
 | 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소, CSV·분석 API의 읽기 전용 조회·JSONB 사용량, 분석 설정 저장 및 `0003`·`0004` 기존 데이터 보존 |
 | TypeScript 타입 검사 및 Vite production build | 통과 |

@@ -1,6 +1,6 @@
 import hashlib
 import json
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import yaml
@@ -52,6 +52,22 @@ class PolicyDocument(Strict):
         if any(not v.strip() for v in self.forbidden_terms):
             raise ValueError('빈 금지어는 허용하지 않습니다.')
         return self
+
+
+JudgePromptText = Annotated[str, Field(strict=True, min_length=1, pattern=r'\S')]
+
+
+class JudgePromptDocument(Strict):
+    common_rubric: JudgePromptText
+    role_rubrics: dict[Role, JudgePromptText]
+    retry_instruction: JudgePromptText
+
+    @field_validator('role_rubrics')
+    @classmethod
+    def all_roles_required(cls, values):
+        if set(values) != set(ROLES):
+            raise ValueError('Judge 프롬프트에 세 역할을 모두 정의해야 합니다.')
+        return values
 
 
 class UniqueLoader(yaml.SafeLoader):

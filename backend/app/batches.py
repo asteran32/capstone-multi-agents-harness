@@ -58,10 +58,14 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
     s.add(batch)
     s.flush()
     manifest, previous_key = [], None
+    frozen_evaluator = evaluation_config
     for index, (task, candidate) in enumerate(selected, 1):
         run_body = RunCreate(**{k: v for k, v in config.items() if k != 'evaluate_l1'},
                              task_id=task.id, candidate_id=candidate.id)
-        run = create_run(s, run_body, f'batch:{batch.id}:{index}', evaluation_config, recovery_strategy)
+        run = create_run(s, run_body, f'batch:{batch.id}:{index}', frozen_evaluator, recovery_strategy)
+        if frozen_evaluator is None:
+            # All 30 runs share one evaluator even if judge.yaml changes during creation.
+            frozen_evaluator = run.config_snapshot
         run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index}
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run'))
         job.payload = {**job.payload, 'batch_id': batch.id, 'depends_on_key': previous_key}
