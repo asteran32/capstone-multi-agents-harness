@@ -165,6 +165,7 @@ def router(authenticate, require, key_required):
                     for mode in ('L1', 'L1+L2', 'FULL'):
                         for strategy in body.recovery_strategies if mode == 'FULL' else ['feedback']:
                             config = {**source.config_snapshot, 'mode': mode, 'rounds': rounds, 'evaluate_l1': True,
+                                      'history_limit': 1,
                                       'policy_raw': evaluator['policy_raw'], 'judge_model': evaluator['judge_model'],
                                       'budget': {**source.config_snapshot['budget'],
                                           'max_input_bytes': evaluator['budget']['max_input_bytes'],

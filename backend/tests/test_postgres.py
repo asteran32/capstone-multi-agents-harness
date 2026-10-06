@@ -105,6 +105,15 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
         with db.transaction() as s:
             batch = s.get(db.Batch, batch_id)
             assert batch_summary(s, batch)['finished_runs'] == 1
+            for index in (0, 1):
+                for call in s.scalars(select(db.Call).where(db.Call.run_id == manifest[index]['run_id'])):
+                    snapshot = s.scalar(select(db.Snapshot).where(db.Snapshot.call_id == call.id))
+                    assert len(snapshot.ordered_history) == index
+                    if index:
+                        previous = s.get(db.Call, snapshot.ordered_history[0]['call_id'])
+                        assert previous.role == call.role and previous.run_id == manifest[0]['run_id']
+                        evaluation = s.get(db.Evaluation, snapshot.ordered_history[0]['evaluation_id'])
+                        assert evaluation.phase == 'offline' and evaluation.aggregate_verdict == 'compliant'
             cancel_batch(s, batch)
     assert claim() is None
     # Exercise the export's read-only repeatable-read transaction and JSONB usage projection.

@@ -1,3 +1,4 @@
+import json
 import pytest
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,7 +33,7 @@ def graphs():
 
 
 @pytest.mark.parametrize('mode', ['L1', 'L1+L2', 'FULL'])
-def test_batch_executes_all_30_in_numeric_order_and_keeps_independent_history(database, mode):
+def test_batch_executes_all_30_with_latest_compliant_output_per_role(database, mode):
     c = client()
     batch = create(c, mode)
     assert batch['total_runs'] == 30 and batch['finished_runs'] == 0
@@ -54,11 +55,33 @@ def test_batch_executes_all_30_in_numeric_order_and_keeps_independent_history(da
     with db.transaction() as s:
         assert s.scalar(select(func.count()).select_from(db.Run)) == 30
         assert s.scalar(select(func.count()).select_from(db.Call)) == 90
-        assert all(not snap.ordered_history for snap in s.scalars(select(db.Snapshot)))
-        for run in s.scalars(select(db.Run)):
+        for index, item in enumerate(batch['items']):
+            run = s.get(db.Run, item['run_id'])
             candidate = s.get(db.Candidate, run.config_snapshot['candidate_id'])
             assert candidate.private_label == 'correct'
             assert run.config_snapshot['batch_id'] == batch['id']
+            assert run.config_snapshot['history_limit'] == 1
+            for call in s.scalars(select(db.Call).where(db.Call.run_id == run.id)):
+                snap = s.scalar(select(db.Snapshot).where(db.Snapshot.call_id == call.id))
+                assert len(snap.ordered_history) == (1 if index else 0)
+                if index:
+                    history = snap.ordered_history[0]
+                    previous = s.get(db.Call, history['call_id'])
+                    assert previous.role == call.role and previous.run_id == batch['items'][index - 1]['run_id']
+                    assert history['source_task_id'] == f'HumanEval/{index - 1}'
+                    assert history['raw_text'] == s.get(db.Response, previous.selected_response_id).raw_text
+                    assert set(history) == {'call_id', 'source_task_id', 'response_id', 'response_version', 'evaluation_id', 'raw_text'}
+                    evaluation = s.get(db.Evaluation, history['evaluation_id'])
+                    assert evaluation.phase == ('offline' if mode == 'L1' else 'online')
+                for request in s.scalars(select(db.ModelRequest).where(db.ModelRequest.call_id == call.id)):
+                    data = json.loads(next(message['content'] for message in request.request_payload['input']
+                                           if message.get('role') == 'user'))
+                    if request.evaluation_id is None:
+                        assert data['history'] == snap.ordered_history
+                        assert request.request_payload['instructions'] == snap.role_prompt
+                        assert ('only the current tool_result proves execution' in request.request_payload['instructions']) == bool(index)
+                    else:
+                        assert 'history' not in data
         assert s.scalar(select(func.count()).select_from(db.Evaluation).where(
             db.Evaluation.phase == 'offline')) == (90 if mode == 'L1' else 0)
 

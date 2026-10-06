@@ -63,7 +63,11 @@ def test_full_recovery_keeps_first_metrics_and_history(database):
     ids = execute_run(run_id)
     with db.transaction() as s:
         snaps = list(s.scalars(select(db.Snapshot).where(db.Snapshot.call_id == ids[6]).order_by(db.Snapshot.response_version)))
-        assert len(snaps[0].ordered_history) == 2 and snaps[1].ordered_history == []
+        assert len(snaps[0].ordered_history) == 1
+        assert snaps[1].ordered_history == snaps[0].ordered_history
+        assert snaps[0].ordered_history[0]['call_id'] == ids[3]
+        assert snaps[0].ordered_history[0]['response_version'] == 1
+        assert '정답 코드' not in snaps[0].ordered_history[0]['raw_text']
         assert snaps[1].parent_snapshot_id == snaps[0].id
         evs = list(s.scalars(select(db.Evaluation).join(db.Response).where(db.Response.call_id == ids[6]).order_by(db.Response.response_version)))
         assert evs[0].aggregate_verdict == 'violated' and evs[0].metric_snapshot['window_count'] == 3
@@ -79,10 +83,12 @@ def test_unresolved_recovery_never_generates_third_response(database):
         assert s.scalar(select(func.count()).select_from(db.Response).where(db.Response.call_id == call.id)) == 2
 
 
-def test_history_includes_failures_excludes_unstarted_and_other_runs(database):
+def test_legacy_history_includes_failures_excludes_unstarted_and_other_runs(database):
     run_id = run_create(rounds=8)
     other = run_create()
     with db.transaction() as s:
+        run = s.get(db.Run, run_id)
+        run.config_snapshot = {**run.config_snapshot, 'history_limit': 5}
         calls = list(s.scalars(select(db.Call).where(db.Call.run_id == run_id, db.Call.role == ROLES[0]).order_by(db.Call.call_seq)))
         assert select_history(s, calls[0]) == []
         for i, call in enumerate(calls[:7]):

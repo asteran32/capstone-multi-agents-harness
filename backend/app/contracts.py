@@ -101,7 +101,7 @@ class Budget(Strict):
 class ExecutionSettings(Strict):
     mode: Literal['Base', 'L1', 'L1+L2', 'FULL'] = 'L1+L2'
     rounds: int = Field(default=1, ge=1, le=20)
-    history_limit: Literal[5] = 5
+    history_limit: Literal[1] = 1
     max_recovery_attempts: Literal[1] = 1
     agent_model: str = 'mock'
     judge_model: str = 'mock'

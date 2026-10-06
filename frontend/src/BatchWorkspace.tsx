@@ -68,14 +68,14 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
 
  return <div className="workspace batch-workspace">
   <aside className="setup">
-   <div className="section-title"><span className="eyebrow">BATCH EXPERIMENT</span><h2>정답 30문제 일괄 실행</h2><p className="muted">HumanEval/0–29의 정답 후보를 번호순으로 실행합니다. 각 문제의 이력은 독립적입니다.</p></div>
+   <div className="section-title"><span className="eyebrow">BATCH EXPERIMENT</span><h2>정답 30문제 일괄 실행</h2><p className="muted">HumanEval/0–29의 정답 후보를 번호순으로 실행합니다. 각 역할은 이 배치에서 자신의 최신 준수 출력 1개를 이어받습니다. 첫 준수 판정 전에는 이력이 비어 있습니다.</p></div>
    <form onSubmit={e=>{e.preventDefault();submit('/batches',{mode,rounds,agent_model:agent,judge_model:judge,prompts_by_role:prompts,policy_raw:policy,budget:{max_requests:budget},evaluate_l1:evaluate},createKey)}}>
     <label>실험 모드<select value={mode} onChange={e=>setMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
     <div className="two-fields"><label>문제당 Round<input type="number" min={1} max={20} value={rounds} onChange={e=>setRounds(Number(e.target.value))} required/></label><label>Run당 최대 API 요청<input type="number" min={1} max={2000} value={budget} onChange={e=>setBudget(Number(e.target.value))} required/></label></div>
     <label>Agent 모델<select value={agent} onChange={e=>setAgent(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
     <label>Judge 모델<select value={judge} onChange={e=>setJudge(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
     <label className="batch-checkbox"><input type="checkbox" checked={evaluate} onChange={e=>setEvaluate(e.target.checked)}/>L1 응답 생성 후 자동 사후 평가</label>
-    <p className="muted">L1+L2와 FULL은 온라인 평가를 사용합니다. L1 사후 평가는 Run당 동일한 별도 요청 한도를 사용합니다.</p>
+    <p className="muted">L1+L2와 FULL은 온라인 평가를 사용합니다. L1 사후 평가는 Run당 동일한 별도 요청 한도를 사용합니다. L1 자동 사후 평가를 끄면 준수 이력이 쌓이지 않습니다.</p>
     <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea aria-label={`${names[role]} 사용자 요청`} rows={6} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})} required/></label>)}<p className="muted">공통 정책의 역할·출력 형식에 맞춘 기본 요청입니다. 정책을 수정하면 사용자 요청도 함께 확인하세요.</p></details>
     <details className="policy"><summary>공통 역할 정책</summary><label>YAML / JSON<textarea className="code-input" rows={16} value={policy} onChange={e=>setPolicy(e.target.value)} required/></label></details>
     <div className="batch-estimate"><strong>30 Run · 기본 {estimated.toLocaleString()}회 요청</strong><p>복구·재시도 제외. 실제 모델 선택 시 API 사용료가 발생합니다.</p></div>
@@ -89,6 +89,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
      <div><strong>{batch.finished_runs} / {batch.total_runs}</strong><span>문제 처리 · 오류 포함 {batch.error_runs}개</span></div>
      <progress value={batch.finished_runs} max={batch.total_runs} aria-label="처리된 문제 수"/>
      <p>{batch.mode} · 문제당 {batch.config_snapshot.rounds} Round · Agent {batch.config_snapshot.agent_model} · Judge {batch.config_snapshot.judge_model}</p>
+     <p className="muted">{batch.config_snapshot.history_limit===1?'History: 역할별 최신 준수 출력 최대 1개 · 이 배치 안에서만 공유':'기존 History: 문제·역할별 이전 작업 최대 5개 · 문제 간 공유 없음'}</p>
      <p className="muted">{new Date(batch.created_at).toLocaleString('ko-KR')} · {batch.id.slice(0,8)}{batch.mode==='L1'&&batch.config_snapshot.evaluate_l1?' · 사후 평가 포함':''}</p>
      {batch.source_batch_id&&<button className="text-button" onClick={()=>onBatch(batch.source_batch_id!)}>원본 일괄 실행 보기 →</button>}
      {!finished.includes(batch.status)&&<button disabled={busy||batch.status==='cancel_requested'} onClick={async()=>{setBusy(true);try{await post(`/batches/${batch.id}/cancel`);setReload(x=>x+1)}catch(e){onError(String(e))}finally{setBusy(false)}}}>남은 실행 취소</button>}
@@ -96,7 +97,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
     <BatchAnalytics key={batch.id} batchId={batch.id} onInspect={onRun}/>
     <ReevaluationPanel key={'reevaluation:'+batch.id} batch={batch} config={config} onBatch={onBatch} onInspect={onRun} onError={onError}/>
     <section className="batch-rerun" aria-label="모드를 바꿔 다시 실행">
-     <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·정답 후보·모델·정책·요청·Round를 유지하고 새 기록을 만듭니다.</p></div>
+     <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·정답 후보·모델·정책·요청·Round를 유지하고 빈 이력에서 다시 시작합니다. 새 실행에는 최신 준수 출력 1개 규칙이 적용됩니다.</p></div>
      <label>새 실험 모드<select value={rerunMode} onChange={e=>setRerunMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
      <button className="primary" disabled={busy} onClick={()=>submit(`/batches/${batch.id}/rerun`,{mode:rerunMode},rerunKey)}>이 모드로 30문제 새 실행</button>
     </section>

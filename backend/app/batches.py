@@ -1,4 +1,4 @@
-"""Persistent batches of independent, ordered runs using the existing job queue."""
+"""Ordered runs with role-isolated compliant-output history within each batch."""
 from collections import Counter
 
 from sqlalchemy import select, func, case

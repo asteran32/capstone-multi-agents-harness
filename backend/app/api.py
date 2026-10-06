@@ -164,7 +164,7 @@ def submit_batch(body, key, source_id=None):
         with transaction() as s:
             source = require(s, Batch, source_id) if source_id else None
             if source:
-                body = BatchCreate(**{**source.config_snapshot, 'mode': body.mode})
+                body = BatchCreate(**{**source.config_snapshot, 'mode': body.mode, 'history_limit': 1})
             batch = create_batch(s, body, key, source)
             return batch_summary(s, batch, detail=True)
     except Conflict as exc:
