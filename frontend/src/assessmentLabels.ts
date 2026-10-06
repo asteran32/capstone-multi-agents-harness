@@ -1,5 +1,6 @@
 export const causeNames:Record<string,string>={
  violation_persisted:'확인된 위반 지속', semantic_uncertainty:'의미적 불확실성',
+ server_check_uncertainty:'서버 형식 검증 불확실',
  judge_error:'Judge 평가 오류', execution_evidence:'실행 근거 불충분',
  judgment_conflict:'미해소 판정 충돌', unknown:'분류 불가',
 };

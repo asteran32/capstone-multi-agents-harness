@@ -8,6 +8,7 @@ import {BatchWorkspace} from './BatchWorkspace';
 import {defaultPrompts} from './defaultPrompts';
 import './style.css';
 import {causeNames} from './assessmentLabels';
+import {presentResponse} from './responsePresentation';
 
 const modes:Mode[]=['Base','L1','L1+L2','FULL'];
 const labels:Record<string,string>={completed:'완료',running:'실행 중',queued:'대기',failed:'실패',cancel_requested:'취소 중',cancelled:'취소됨',unresolved:'미해결',blocked:'차단',compliant:'준수',violated:'위반',uncertain:'불확실',disabled:'비활성',pending:'평가 중',error:'오류',pass:'통과',fail:'실패',timeout:'시간 초과',not_executed:'미실행',mock:'Mock',live:'Live'};
@@ -15,6 +16,11 @@ function Badge({value}:{value:string|null|undefined}) {return <span className={'
 const percent=(n:number|null|undefined)=>n==null?'—':`${Math.round(n*100)}%`;
 const pretty=(v:unknown)=>JSON.stringify(v,null,2);
 function Raw({title,value}:{title:string,value:unknown}) {return <details className="raw"><summary>{title}</summary><pre>{typeof value==='string'?value:pretty(value)}</pre></details>}
+
+function ResponseView({role,response}:{role:Role,response:Dict}) {
+ const display=presentResponse(role,response.parsed_output);
+ return <><pre className="response-text">{display??response.raw_text}</pre>{display!==null&&<><p className="muted">구조화 응답 표시 · 제목과 오류 없음 문구는 화면에서 구성합니다.</p><Raw title="모델 원본 JSON" value={response.raw_text}/></>}{response.format_error&&<p className="error">출력 규격 오류: {response.format_error}</p>}</>;
+}
 
 function Login({onLogin}:{onLogin:()=>void}) {
  const [user,setUser]=useState('researcher'),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
@@ -55,13 +61,14 @@ function Metrics({ev,initial,requests,phase}:{ev:Dict|undefined,initial?:Dict,re
  return <div className="metrics"><div className="metric-heading"><span className="eyebrow">{ev.phase==='offline'?'OFFLINE':'ONLINE'} · M3</span><Badge value={ev.status==='disabled'?'disabled':ev.aggregate_verdict}/></div>
  {ev.status==='disabled'?<><p className="muted">이 모드의 온라인 평가는 비활성입니다. 종료 후 저장된 출력을 평가할 수 있습니다.</p>{tokens}</>:<>
  <div className="metric-line"><span>Lexical · M2</span><span>{ev.lexical_result?.match_count??'—'} matches</span><Badge value={ev.lexical_result?.verdict}/></div>
- {['INFO','SCOPE','EXEC'].map(k=><details className="rule" key={k}><summary><span>{k}{k==='INFO'?' · M1':''}{applied?.[k]?.authority==='server'?' · 서버 적용':''}</span><Badge value={applied?.[k]?.verdict}/></summary><p>{applied?.[k]?.reason||'평가 중'}</p><p>원래 Judge 판정: {labels[ev.judge_result?.[k]?.verdict]||'—'} · {ev.judge_result?.[k]?.reason}</p>{ev.judge_result?.[k]?.evidence&&<blockquote>{ev.judge_result[k].evidence}</blockquote>}</details>)}
+ {['INFO','SCOPE','EXEC'].map(k=><details className="rule" key={k}><summary><span>{k}{k==='INFO'?' · M1':''}{applied?.[k]?.authority==='server'?' · 서버 적용':applied?.[k]?.authority==='mixed'?' · 서버 + Judge':''}</span><Badge value={applied?.[k]?.verdict}/></summary><p>{applied?.[k]?.reason||'평가 중'}</p><p>원래 Judge 판정: {labels[ev.judge_result?.[k]?.verdict]||'—'} · {ev.judge_result?.[k]?.reason}</p>{ev.judge_result?.[k]?.evidence&&<blockquote>{ev.judge_result[k].evidence}</blockquote>}{applied?.[k]?.criteria&&<Raw title="세부 기준 및 판정 주체" value={applied[k].criteria}/>}</details>)}
  {ev.judgment_resolution?.conflicts?.length>0&&<Raw title={`서버–Judge 충돌 ${ev.judgment_resolution.conflicts.length}건 · 적용 근거`} value={ev.judgment_resolution.conflicts}/>}
  {ev.aggregate_verdict==='uncertain'&&ev.judgment_resolution&&<p className="window-note">불확실 원인: {ev.judgment_resolution.uncertainty_reasons.map((key:string)=>causeNames[key]||key).join(' · ')}</p>}
+ {ev.judgment_resolution?.output_contract&&<p className="window-note">출력 규격 {ev.judgment_resolution.output_contract} · 평가 버전 {ev.evaluation_version?.slice(0,12)}</p>}
  <div className="metric-numbers" title="최초 응답 기준 최근 창"><div><small>위반율 · M4</small><strong>{percent(m?.role_violation_rate)}</strong></div><div><small>Decision coverage</small><strong>{percent(m?.decision_coverage)}</strong></div></div>
  {tokens}
  <p className="window-note">{m?`최근 ${m.window_count}/5회 · V ${m.V} / C ${m.C} / U ${m.U}${m.warmup?' · Warmup':''}`:'복구 응답은 최근 창에 추가하지 않습니다.'}</p>
- <p className="window-note">인용 근거 {ev.evidence_validation?.valid?'검증 완료':ev.evidence_validation?'검증 실패':'검증 대기'}{ev.execution_evidence?.applicable!==false&&ev.execution_evidence?.verdict?' · 실행 보고 '+(labels[ev.execution_evidence.verdict]||ev.execution_evidence.verdict):''}</p>{ev.status==='error'&&<p className="error">Judge 오류 · 근거 검증 기록을 확인하세요.</p>}
+ <p className="window-note">인용 근거 {ev.evidence_validation?.valid?'검증 완료':ev.evidence_validation?'검증 실패':'검증 대기'}{ev.execution_evidence?.applicable!==false&&ev.execution_evidence?.verdict?' · 서버 검증 '+(labels[ev.execution_evidence.verdict]||ev.execution_evidence.verdict):''}</p>{ev.status==='error'&&<p className="error">Judge 오류 · 근거 검증 기록을 확인하세요.</p>}
  </>}</div>
 }
 
@@ -72,7 +79,7 @@ function AgentRow({role,index,call,phase,historyLimit,onInspect}:{role:Role,inde
  const original=call?.snapshots?.find(s=>s.response_version===0),recovery=call?.snapshots?.find(s=>s.response_version===1);
  return <section className="agent-row"><div className="agent-output"><div className="agent-title"><div><span className="number">0{index+1}</span><h3>{names[role]}</h3></div><Badge value={call?.status||'queued'}/></div>
  <div className="output-toolbar"><span>{['LeetCode 스타일 문제 설명','요구사항 충족 여부와 오류 검토','원본 테스트 실행 보고'][index]}</span>{(call?.responses?.length||0)>1&&<div className="mini-tabs">{[0,1].map(v=><button key={v} className={version===v?'active':''} onClick={()=>setVersion(v)}>{v?'복구':'최초'}</button>)}</div>}</div>
- {response?<pre className="response-text">{response.raw_text}</pre>:<div className="output-placeholder"><span className={call?.status==='running'?'working':''}>↳</span><p>{call?.status==='running'?'응답을 생성하고 있습니다.':'실행 결과가 여기에 표시됩니다.'}</p></div>}
+ {response?<ResponseView role={role} response={response}/>:<div className="output-placeholder"><span className={call?.status==='running'?'working':''}>↳</span><p>{call?.status==='running'?'응답을 생성하고 있습니다.':'실행 결과가 여기에 표시됩니다.'}</p></div>}
  {recovery&&<div className="recovery-line"><span>최초</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)?.aggregate_verdict}/><span>→ 복구</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===1)?.id)?.aggregate_verdict}/><span>지표는 최초 응답 기준</span></div>}{call?.error&&<p className="error">{call.error.message||call.error.code}</p>}
  <div className="output-footer"><span>History {original?.ordered_history?.length??0}/{historyLimit}{recovery?` → ${recovery.ordered_history.length} (${recovery.recovery_feedback?'feedback':recovery.reset_reason==='confirmed_violation_retry'?'retry':'reset'})`:''}</span>{historyLimit===1&&original?.ordered_history?.[0]&&<span>최초 입력 출처 {original.ordered_history[0].source_task_id} · 준수 출력</span>}{call?.tools?.[0]?.result&&<span>코드 테스트 <Badge value={call.tools[0].result.status}/></span>}{call&&<button className="text-button" onClick={()=>onInspect(call.id)}>상세 기록 ↗</button>}</div>
  </div><Metrics ev={ev} initial={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)} requests={call?.requests} phase={phase}/></section>
