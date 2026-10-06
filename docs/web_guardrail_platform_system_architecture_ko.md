@@ -55,7 +55,7 @@ PostgreSQL은 하나의 인스턴스를 사용하되 업무 테이블과 checkpo
 | Worker scheduler | job claim, lease, heartbeat, 순차 call 실행 | 확정 실행 계획과 call 상태 |
 | Agent graph | 입력 고정, 생성, 도구 루프, 평가, 복구, 최종 선택 | call state와 업무 레코드 |
 | Evaluation service | lexical, Judge, 인용 검증, 실행 근거 대조, 지표 | response와 evaluation |
-| History service | 동일 run 및 role의 이전 작업 선택과 snapshot | 순서가 고정된 최대 5건 |
+| History service | 동일 batch 및 role의 최신 준수 출력 선택과 snapshot | 최대 1개, 단독 Run은 자기 Run에서만 선택 |
 | Provider adapter | 실제 payload 구성, API 전송, 사용량 및 오류 수집 | agent 또는 Judge 요청과 원문 응답 |
 | Tool dispatcher | 역할 권한, 인자 검증, 횟수 제한, 결과 재사용 | 허용된 실행 명령 |
 | Sandbox executor | 격리 환경 생성, 실행 상태 확인, 제한 적용, 결과 수집 | 코드 및 원본 테스트, 구조화 결과 |
@@ -113,7 +113,7 @@ sequenceDiagram
     W->>DB: run 및 job 종료
 ```
 
-예산과 취소 상태는 각 외부 호출 및 다음 단계 진입 전에 확인한다. 취소는 이후 작업 시작을 차단하며 이미 수신한 응답과 도구 결과는 보존한다. 실행 전 취소된 call은 history에서 제외하고, 실행을 시작한 뒤 종료된 실패나 취소 기록은 포함한다.
+예산과 취소 상태는 각 외부 호출 및 다음 단계 진입 전에 확인한다. 취소는 이후 작업 시작을 차단하며 이미 수신한 응답과 도구 결과는 보존한다. 새 실행의 history는 완료된 호출의 최종 준수 출력만 포함하고 실패·취소·미해결은 제외한다.
 
 ## LangGraph 설계
 
@@ -136,7 +136,7 @@ flowchart TD
     V -->|무효이며 재시도 가능| J
     V -->|유효 또는 시도 소진| M[실행 근거 대조 및 평가 집계]
     M --> R{FULL 최초 확정 위반}
-    R -->|예| C[빈 history 파생 snapshot 생성]
+    R -->|예| C[복구 전략별 history 및 feedback snapshot 생성]
     C --> A
     R -->|아니요| F[최종 결과 선택]
     D --> F
@@ -170,7 +170,7 @@ flowchart TD
 
 기본 선택은 L1+L2다. 모든 모드는 최소 업무 지시와 출력 형식, 역할별 데이터 제한, 서버 도구 권한 및 sandbox 제한을 유지한다.
 
-FULL에서 최초 compliant 또는 uncertain은 최초 응답을 선택한다. 최초 violated이면 원본 snapshot을 보존하고 history가 빈 파생 snapshot으로 다시 생성한다. 이때 이전 출력이나 Judge 설명을 힌트로 추가하지 않는다. Judge 시도 카운터는 복구 응답 기준으로 초기화한다.
+FULL에서 최초 compliant 또는 uncertain은 최초 응답을 선택한다. 최초 violated이면 원본 snapshot을 보존하고 파생 snapshot으로 다시 생성한다. 새 실행의 기본 feedback은 최초 snapshot의 준수 history와 원본 응답·확인된 위반 피드백을 전달한다. reset 비교 전략은 history를 비우고 retry는 유지하며 두 대조 조건에는 feedback을 추가하지 않는다. Judge 시도 카운터는 복구 응답 기준으로 초기화한다.
 
 복구가 compliant이면 복구 응답을 선택한다. 복구가 violated 또는 uncertain이면 `selected_response_id=null`, 미해결 상태와 고정 안내를 반환하도록 설계한다. 두 원문은 계속 조회할 수 있다. 복구 중 runner는 기존 도구 결과만 사용하며 새 테스트 실행은 금지한다. 기존 결과가 없으면 실행하지 못했다는 사실을 보고해야 한다.
 
@@ -182,9 +182,9 @@ FULL에서 최초 compliant 또는 uncertain은 최초 응답을 선택한다. �
 
 ### 입력 snapshot
 
-현재 call 이전에 종료된 동일 run·role 작업 중 최신 최대 5건을 선택한 뒤 오래된 순서로 배열한다. 성공·실패·차단·불확실을 모두 포함하고, 출력 없는 실패는 null과 오류로 표현한다. 응답 버전 목록은 한 history 항목에 함께 넣는다.
+2026-10-06 이후 새 Run은 history_limit=1이다. 같은 batch manifest의 이전 Run과 현재 Run의 이전 call_seq에서 같은 역할의 최신 준수 출력 1개만 선택한다. 최종 선택 응답, 완료된 유효 평가, 같은 evaluation_version, Judge INFO/SCOPE/EXEC 모두 compliant, aggregate_verdict compliant가 필요하다. L1은 offline 평가, L1+L2/FULL은 online 평가를 사용한다. 최초 준수 출력 전에는 빈 배열이며 다른 배치·다른 역할·미래 작업은 제외한다. 단독 Run은 자기 Run 안에서만 선택한다. 기존 history_limit=5 Run은 과거 규칙을 유지한다.
 
-History에는 당시 사용자 요청, 허용된 업무 입력, 응답, 상태·오류 및 runner의 실제 도구 결과만 넣는다. Judge 사유·지표·비공개 라벨·이전 전체 API payload는 제외한다. 첫 Agent 호출 전에 내용·ID·순서·해시를 고정하고, 전송 재시도에서 다시 조회하지 않는다. 문맥 초과는 명시적 오류로 처리하며 임의 요약이나 history 삭제는 하지 않는다.
+History에는 자기 역할의 출력 raw_text와 source_task_id, call_id, response_id, response_version, evaluation_id만 넣는다. 과거 입력·코드·요청·다른 역할 출력·Judge 설명·도구 결과는 제외하며 현재 tool_result만 현재 실행의 증거로 사용한다. 첫 Agent 호출 전에 내용·ID·순서·해시를 고정하고, 전송 재시도에서 다시 조회하지 않는다. 문맥 초과는 명시적 오류로 처리하며 임의 요약이나 history 삭제는 하지 않는다.
 
 ### 평가 단계
 
@@ -216,7 +216,7 @@ warmup = window_count < 5
 
 ## 데이터 아키텍처
 
-기존 11개 업무 테이블에 정답 일괄 실행용 `batches`를 추가해 12개를 사용한다. `batches`는 idempotency key, 고정 설정·30문제 manifest, 원본 batch ID와 취소 상태를 저장한다. 각 Run의 config_snapshot에는 batch ID·순번을, Job payload에는 batch ID·선행 job key를 저장한다. Worker는 선행 작업이 종료된 Job만 claim하여 생성→선택적 L1 사후 평가→다음 문제 순서를 보존한다. 오류를 기록한 다음 나머지 문제를 처리하며 문제 간 history는 공유하지 않는다. JSONB 상세 구조에도 Pydantic schema_version을 적용하고, UUID와 UTC timestamptz를 사용한다.
+기존 11개 업무 테이블에 정답 일괄 실행용 `batches`를 추가해 12개를 사용한다. `batches`는 idempotency key, 고정 설정·30문제 manifest, 원본 batch ID와 취소 상태를 저장한다. 각 Run의 config_snapshot에는 batch ID·순번을, Job payload에는 batch ID·선행 job key를 저장한다. Worker는 선행 작업이 종료된 Job만 claim하여 생성→선택적 L1 사후 평가→다음 문제 순서를 보존한다. 오류를 기록한 다음 나머지 문제를 처리하며 같은 배치 안에서 역할별 준수 출력 1개를 다음 문제에 전달한다. L1 자동 사후 평가가 없으면 준수 이력이 생기지 않는다. JSONB 상세 구조에도 Pydantic schema_version을 적용하고, UUID와 UTC timestamptz를 사용한다.
 
 ```mermaid
 erDiagram
@@ -267,7 +267,7 @@ Judge 요청 전에 evaluation 행을 생성하여 `model_requests.evaluation_id
 
 History 조회에는 `(run_id, role, call_seq)`, 로그에는 `(call_id, event_seq)`, run 목록에는 `(created_at, id)`, queue에는 `(status, lease_expires_at)` 인덱스를 사용하도록 설계한다. 필터별 추가 인덱스는 실제 조회 계획을 확인해 결정한다.
 
-선택 응답, snapshot, evaluation과 request의 call 일치 여부를 서비스에서 검증하고, 표현 가능한 관계에는 복합 FK를 적용한다. JSONB의 history ID와 metric assessment ID도 run·role·phase·버전 및 순서를 별도 검증한다. History 배열 길이는 0~5로 제한한다.
+선택 응답, snapshot, evaluation과 request의 call 일치 여부를 서비스에서 검증하고, 표현 가능한 관계에는 복합 FK를 적용한다. JSONB의 history ID와 metric assessment ID도 run·role·phase·버전 및 순서를 별도 검증한다. 새 실행의 History 배열 길이는 0~1이다. DB의 0~5 제약은 기존 기록 호환을 위해 유지한다.
 
 원본 정책의 YAML/JSON 텍스트·검증 설정·렌더링 버전·해시는 run config_snapshot에 함께 보관한다. YAML은 안전한 parser를 사용하고 중복 키·역할 불일치·형식 오류는 저장 전에 거부한다. 독립적인 정책 관리 테이블 대신 편집한 정책 파일과 실행 snapshot으로 MVP의 버전을 보존한다.
 
@@ -373,8 +373,8 @@ web_guardrail_platform/
 | 단계 | 구현 결과 | 핵심 검증 |
 |---|---|---|
 | 1 | DB migration, DTO, 모드, run 생성 및 mock | 고유키, 불변 설정, 중복 요청 및 409 |
-| 2 | Worker, Agent graph, checkpoint, history | 0/3/7건에서 0/3/5건 선택, 실패 포함, run·role 분리 |
-| 3 | L2, L3, offline graph | lexical 실패에도 Judge 호출, 허위 인용 거부, 복구 1회 및 빈 history |
+| 2 | Worker, Agent graph, checkpoint, history | 준수 전 0개·최신 준수 1개, batch·role 격리, L1 사후 평가 연계, 과거 5건 방식 호환 |
+| 3 | L2, L3, offline graph | lexical 실패에도 Judge 호출, 허위 인용 거부, 복구 1회 및 feedback/retry 이력 유지·reset 이력 제거 |
 | 4 | 실행 UI 및 기록 대시보드 | 세로 3행과 우측 지표, 원문·근거·history 복원, polling 종료 |
 | 5 | 실제 adapter 및 sandbox | 동일 후보 해시, 원본 테스트 실행, L3 도구 재실행 금지 |
 | 6 | 장애 주입 및 비교 검증 | 재시작·저장 경계·lease 만료, 중복 방지, 독립 모드 history |
