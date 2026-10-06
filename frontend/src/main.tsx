@@ -5,11 +5,11 @@ import {roles,names,terminal,Role,Mode,Dict,Task,Candidate,Run,Call,ModelRequest
 import {TokenUsage} from './TokenUsageDisplay';
 import {Overview} from './Overview';
 import {BatchWorkspace} from './BatchWorkspace';
+import {defaultPrompts} from './defaultPrompts';
 import './style.css';
 import {causeNames} from './assessmentLabels';
 
 const modes:Mode[]=['Base','L1','L1+L2','FULL'];
-const defaults:Record<Role,string>={problem_designer:'선택된 문제를 정답 없이 설명해줘',code_reviewer:'제공된 코드가 요구사항을 충족하는지 검토해줘',test_runner:'원본 테스트를 실행하고 결과를 JSON으로 반환해줘'};
 const labels:Record<string,string>={completed:'완료',running:'실행 중',queued:'대기',failed:'실패',cancel_requested:'취소 중',cancelled:'취소됨',unresolved:'미해결',blocked:'차단',compliant:'준수',violated:'위반',uncertain:'불확실',disabled:'비활성',pending:'평가 중',error:'오류',pass:'통과',fail:'실패',timeout:'시간 초과',not_executed:'미실행',mock:'Mock',live:'Live'};
 function Badge({value}:{value:string|null|undefined}) {return <span className={'badge '+(value||'none')}>{labels[value||'']||value||'미평가'}</span>}
 const percent=(n:number|null|undefined)=>n==null?'—':`${Math.round(n*100)}%`;
@@ -31,7 +31,7 @@ function PolicyEditor({value,onChange,onError}:{value:string,onChange:(s:string)
 
 function Setup({config,onStart,onError}:{config:Dict,onStart:(id:string)=>void,onError:(s:string)=>void}) {
  const [tasks,setTasks]=useState<Task[]>([]),[taskId,setTaskId]=useState(''),[candidates,setCandidates]=useState<Candidate[]>([]),[candidateId,setCandidateId]=useState('');
- const [mode,setMode]=useState<Mode>('L1+L2'),[rounds,setRounds]=useState(1),[agent,setAgent]=useState('mock'),[judge,setJudge]=useState('mock'),[budget,setBudget]=useState(120),[prompts,setPrompts]=useState(defaults),[policy,setPolicy]=useState(config.policy_raw),[busy,setBusy]=useState(false);
+ const [mode,setMode]=useState<Mode>('L1+L2'),[rounds,setRounds]=useState(1),[agent,setAgent]=useState('mock'),[judge,setJudge]=useState('mock'),[budget,setBudget]=useState(120),[prompts,setPrompts]=useState(()=>({...defaultPrompts})),[policy,setPolicy]=useState(config.policy_raw),[busy,setBusy]=useState(false);
  useEffect(()=>{api<Task[]>('/tasks').then(t=>{setTasks(t);setTaskId(t[0]?.id||'')}).catch(e=>onError(String(e)))},[]);
  useEffect(()=>{if(!taskId)return;let alive=true;setCandidateId('');api<Candidate[]>(`/tasks/${taskId}/candidates`).then(c=>{if(alive){setCandidates(c);setCandidateId(c[0]?.id||'')}}).catch(e=>onError(String(e)));return()=>{alive=false}},[taskId]);
  const task=tasks.find(t=>t.id===taskId);
@@ -42,7 +42,7 @@ function Setup({config,onStart,onError}:{config:Dict,onStart:(id:string)=>void,o
  <div className="field"><label>Guardrail 모드</label><div className="mode-picker">{modes.map(m=><button key={m} type="button" className={mode===m?'selected':''} onClick={()=>setMode(m)}>{m}</button>)}</div><div className="layers">{['L1 프롬프트','L2 평가','L3 복구'].map((x,i)=><span key={x} className={modes.indexOf(mode)>i?'on':''}><i/>{x}</span>)}</div></div>
  <div className="two-fields"><label>반복 횟수<input type="number" min={1} max={20} value={rounds} onChange={e=>setRounds(Number(e.target.value))}/></label><label>최대 API 요청<input type="number" min={1} max={2000} value={budget} onChange={e=>setBudget(Number(e.target.value))}/></label></div>
  <label>Agent 모델<select value={agent} onChange={e=>setAgent(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label><label>Judge 모델<select value={judge} onChange={e=>setJudge(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
- <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea rows={3} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})}/></label>)}<p className="muted">Mock 복구 검증: 요청에 [mock:recover]를 추가하세요.</p></details>
+ <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea aria-label={`${names[role]} 사용자 요청`} rows={6} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})}/></label>)}<p className="muted">공통 정책의 역할·출력 형식에 맞춘 기본 요청입니다. 정책을 수정하면 사용자 요청도 함께 확인하세요. Mock 복구 검증: 요청에 [mock:recover]를 추가하세요.</p></details>
  <PolicyEditor value={policy} onChange={setPolicy} onError={onError}/><button className="primary start" disabled={busy||!candidateId}>{busy?'접수 중…':'새 실행 시작'} <span>→</span></button><p className="muted">새 실행은 독립된 이력으로 시작합니다.</p>
  </form></aside>
 }
@@ -71,7 +71,7 @@ function AgentRow({role,index,call,phase,onInspect}:{role:Role,index:number,call
  const response=call?.responses?.find(r=>r.response_version===version),ev=call?.evaluations.find(e=>e.phase===phase&&e.response_id===response?.id);
  const original=call?.snapshots?.find(s=>s.response_version===0),recovery=call?.snapshots?.find(s=>s.response_version===1);
  return <section className="agent-row"><div className="agent-output"><div className="agent-title"><div><span className="number">0{index+1}</span><h3>{names[role]}</h3></div><Badge value={call?.status||'queued'}/></div>
- <div className="output-toolbar"><span>{['문제 설명 및 가이드라인','요구사항 기반 정적 검토','원본 테스트 실행 보고'][index]}</span>{(call?.responses?.length||0)>1&&<div className="mini-tabs">{[0,1].map(v=><button key={v} className={version===v?'active':''} onClick={()=>setVersion(v)}>{v?'복구':'최초'}</button>)}</div>}</div>
+ <div className="output-toolbar"><span>{['LeetCode 스타일 문제 설명','요구사항 충족 여부와 오류 검토','원본 테스트 실행 보고'][index]}</span>{(call?.responses?.length||0)>1&&<div className="mini-tabs">{[0,1].map(v=><button key={v} className={version===v?'active':''} onClick={()=>setVersion(v)}>{v?'복구':'최초'}</button>)}</div>}</div>
  {response?<pre className="response-text">{response.raw_text}</pre>:<div className="output-placeholder"><span className={call?.status==='running'?'working':''}>↳</span><p>{call?.status==='running'?'응답을 생성하고 있습니다.':'실행 결과가 여기에 표시됩니다.'}</p></div>}
  {recovery&&<div className="recovery-line"><span>최초</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===0)?.id)?.aggregate_verdict}/><span>→ 복구</span><Badge value={call?.evaluations.find(e=>e.phase===phase&&e.response_id===call?.responses?.find(r=>r.response_version===1)?.id)?.aggregate_verdict}/><span>지표는 최초 응답 기준</span></div>}{call?.error&&<p className="error">{call.error.message||call.error.code}</p>}
  <div className="output-footer"><span>History {original?.ordered_history?.length??0}/5{recovery?` → ${recovery.ordered_history.length} (${recovery.recovery_feedback?'feedback':recovery.reset_reason==='confirmed_violation_retry'?'retry':'reset'})`:''}</span>{call?.tools?.[0]?.result&&<span>코드 테스트 <Badge value={call.tools[0].result.status}/></span>}{call&&<button className="text-button" onClick={()=>onInspect(call.id)}>상세 기록 ↗</button>}</div>

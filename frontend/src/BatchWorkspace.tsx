@@ -1,14 +1,14 @@
 import {useEffect, useRef, useState} from 'react';
 import {api, downloadCsv, post} from './api';
-import {Batch, Dict, ExperimentMode, Role, names, roles} from './types';
+import {Batch, Dict, ExperimentMode, names, roles} from './types';
 import {BatchAnalytics} from './BatchAnalytics';
 import {ReevaluationPanel} from './ReevaluationPanel';
+import {defaultPrompts} from './defaultPrompts';
 import './batches.css';
 
 const modes: ExperimentMode[] = ['L1', 'L1+L2', 'FULL'];
 const finished = ['completed', 'completed_with_errors', 'cancelled'];
 const labels: Record<string, string> = {queued:'대기', running:'실행 중', completed:'완료', completed_with_errors:'오류 포함 완료', failed:'실패', cancelled:'취소됨', cancel_requested:'취소 중'};
-const defaults: Record<Role,string> = {problem_designer:'선택된 문제를 정답 없이 설명해줘', code_reviewer:'제공된 코드가 요구사항을 충족하는지 검토해줘', test_runner:'원본 테스트를 실행하고 결과를 JSON으로 반환해줘'};
 function Status({value}: {value:string}) {return <span className={'badge '+value}>{labels[value]||value}</span>}
 type RequestKey = {fingerprint:string; key:string}|null;
 
@@ -17,7 +17,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
 }) {
  const [mode,setMode]=useState<ExperimentMode>('L1'), [rounds,setRounds]=useState(1);
  const [agent,setAgent]=useState('mock'), [judge,setJudge]=useState('mock'), [budget,setBudget]=useState(1000);
- const [evaluate,setEvaluate]=useState(true), [prompts,setPrompts]=useState(defaults), [policy,setPolicy]=useState(config.policy_raw as string);
+ const [evaluate,setEvaluate]=useState(true), [prompts,setPrompts]=useState(()=>({...defaultPrompts})), [policy,setPolicy]=useState(config.policy_raw as string);
  const [batch,setBatch]=useState<Batch|null>(null), [archive,setArchive]=useState<{items:Batch[];total:number}>({items:[],total:0});
  const [offset,setOffset]=useState(0), [reload,setReload]=useState(0), [busy,setBusy]=useState(false), [loading,setLoading]=useState(false);
  const [rerunMode,setRerunMode]=useState<ExperimentMode>('L1+L2');
@@ -76,7 +76,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
     <label>Judge 모델<select value={judge} onChange={e=>setJudge(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
     <label className="batch-checkbox"><input type="checkbox" checked={evaluate} onChange={e=>setEvaluate(e.target.checked)}/>L1 응답 생성 후 자동 사후 평가</label>
     <p className="muted">L1+L2와 FULL은 온라인 평가를 사용합니다. L1 사후 평가는 Run당 동일한 별도 요청 한도를 사용합니다.</p>
-    <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea rows={3} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})} required/></label>)}</details>
+    <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea aria-label={`${names[role]} 사용자 요청`} rows={6} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})} required/></label>)}<p className="muted">공통 정책의 역할·출력 형식에 맞춘 기본 요청입니다. 정책을 수정하면 사용자 요청도 함께 확인하세요.</p></details>
     <details className="policy"><summary>공통 역할 정책</summary><label>YAML / JSON<textarea className="code-input" rows={16} value={policy} onChange={e=>setPolicy(e.target.value)} required/></label></details>
     <div className="batch-estimate"><strong>30 Run · 기본 {estimated.toLocaleString()}회 요청</strong><p>복구·재시도 제외. 실제 모델 선택 시 API 사용료가 발생합니다.</p></div>
     <button className="primary start" disabled={busy||!rounds||!budget}>{busy?'접수 중…':'30문제 일괄 실행 시작'} <span>→</span></button>

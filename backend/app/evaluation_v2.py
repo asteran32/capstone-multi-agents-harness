@@ -39,7 +39,9 @@ def judge_payload(config, role, response_id, response_sha256, text, task_input, 
     if not is_v2(config):
         raise ValueError('Version 2 evaluation profile required')
     profile = config['evaluation_profile']
-    data = {'role': role, 'policy': next(p for p in config['policy']['roles'] if p['role'] == role),
+    policy = next(p for p in config['policy']['roles'] if p['role'] == role)
+    # Agent demonstrations are not extra policy requirements or Judge targets.
+    data = {'role': role, 'policy': {k: v for k, v in policy.items() if k != 'few_shot_examples'},
             'evaluation_target': {'response_id': response_id, 'response_sha256': response_sha256,
                                   'current_response': text},
             'reference_material': {'task_input': task_input, 'user_prompt': user_prompt},
@@ -48,8 +50,22 @@ def judge_payload(config, role, response_id, response_sha256, text, task_input, 
         data['retry_feedback'] = {k: retry_feedback.get(k) for k in
                                  ('failure_kind', 'failed_rules', 'error', 'judge_output')}
         data['retry_feedback']['instruction'] = profile['retry_instruction']
+    instructions = profile['common_rubric'] + '\n' + profile['role_rubrics'][role]
+    examples = profile.get('few_shot_examples', {}).get(role, [])
+    if examples:
+        demonstrations = [{'id': example['id'], 'input': {
+            'role': role, 'reference_material': example['reference_material'],
+            'evaluation_target': {'current_response': example['current_response']},
+            'server_checks': example['server_checks']}, 'expected_output': example['expected']}
+            for example in examples]
+        instructions += ('\n\nThese labeled demonstrations use the default role policy. '
+                         'They illustrate boundaries, not additional requirements. '
+                         'The supplied policy governs the actual request if it differs. '
+                         'Never quote demonstration text as evidence for the actual target. '
+                         'Evaluate only evaluation_target.current_response in the final user input.\n'
+                         '<judge_examples>\n' + canonical(demonstrations) + '\n</judge_examples>')
     return {'model': config['judge_model'], 'store': False,
-            'instructions': profile['common_rubric'] + '\n' + profile['role_rubrics'][role],
+            'instructions': instructions,
             'input': [{'role': 'developer', 'content': 'Return JSON matching this schema: ' + canonical(profile['judge_schema'])},
                       {'role': 'user', 'content': canonical(data)}],
             'max_output_tokens': config['budget']['max_output_tokens'],

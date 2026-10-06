@@ -38,6 +38,7 @@ def test_modes_and_payloads(database, mode, l1, l2, l3):
             call = s.get(db.Call, call_id)
             snap = s.scalar(select(db.Snapshot).where(db.Snapshot.call_id == call_id, db.Snapshot.response_version == 0))
             assert ('필수 지침' in snap.role_prompt) == l1
+            assert ('<agent_examples>' in snap.role_prompt) == l1
             evs = list(s.scalars(select(db.Evaluation).join(db.Response).where(db.Response.call_id == call_id)))
             assert all(e.status == 'disabled' for e in evs) == (not l2)
             judge_requests = list(s.scalars(select(db.ModelRequest).where(db.ModelRequest.call_id == call_id, db.ModelRequest.evaluation_id.is_not(None))))
@@ -45,6 +46,10 @@ def test_modes_and_payloads(database, mode, l1, l2, l3):
             assert len(list(s.scalars(select(db.Response).where(db.Response.call_id == call_id)))) == (2 if l3 and call.role != 'test_runner' else 1)
             for req in s.scalars(select(db.ModelRequest).where(db.ModelRequest.call_id == call_id)):
                 payload = canonical(req.request_payload)
+                if req.evaluation_id is None:
+                    assert ('<agent_examples>' in req.request_payload['instructions']) == l1
+                else:
+                    assert '<judge_examples>' in req.request_payload['instructions']
                 assert 'private_label' not in payload and 'expected_failure' not in payload
                 if call.role != 'problem_designer':
                     assert 'canonical_solution' not in payload
