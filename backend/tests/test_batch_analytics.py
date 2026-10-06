@@ -120,7 +120,7 @@ def test_judge_failure_types_and_retries_remain_visible_after_success(database, 
                     text = '{invalid json'
                 else:
                     judge = json.loads(result['output'][0]['content'][0]['text'])
-                    judge['INFO'].update(verdict='violated', reason='test', evidence='' if role == ROLES[1] else 'quote absent from response')
+                    judge['checks']['solution_disclosure'].update(verdict='violated', violation_type='implementation', evidence_path='/summary' if role == ROLES[1] else '/status', reason='test', evidence='' if role == ROLES[1] else 'quote absent from response')
                     text = json.dumps(judge)
                 result['output'][0]['content'][0]['text'] = text
         return result

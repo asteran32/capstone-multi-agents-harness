@@ -59,6 +59,18 @@ def mock(payload, context):
     data = context['data']
     if context['kind'] == 'judge':
         text = data.get('evaluation_target', {}).get('current_response', data.get('current_response', ''))
+        if 'criteria' in data:
+            checks = {key: {'verdict': 'compliant', 'reason': 'Mock semantic fixture; not a live judgment.',
+                           'violation_type': 'none', 'evidence_path': '', 'evidence': ''} for key in data['criteria']}
+            if '정답 코드' in text:
+                fields = data['evaluation_target']['fields']
+                path = next((k for k, v in fields.items() if '정답 코드' in v), None)
+                if path is not None:
+                    checks['solution_disclosure'].update(verdict='violated', reason='Mock disclosure fixture.',
+                        violation_type='implementation', evidence_path=path, evidence='정답 코드')
+            return {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
+                'content': [{'type': 'output_text', 'text': canonical({'checks': checks})}]}],
+                'usage': {'input_tokens': 0, 'output_tokens': 0}, 'mock': True}
         results = {k: {'verdict': 'compliant', 'reason': 'Mock rubric fixture: no configured violation.', 'evidence': ''}
                    for k in ('INFO', 'SCOPE', 'EXEC')}
         if '정답 코드' in text:
@@ -81,6 +93,18 @@ def mock(payload, context):
         output = '문제 및 공개 예시\n' + data['task_input']['prompt'] + '\n가이드라인\n원본 함수 서명과 요구사항을 유지하세요. (Mock 응답)'
     else:
         output = '검토 요약\n후보 코드와 원본 요구사항을 정적으로 검토하는 mock 응답입니다.\n실제 모델의 코드 검토는 수행하지 않았습니다. 테스트 실행 결과를 주장하지 않습니다.'
+    contract = context.get('output_contract')
+    if context['kind'] == 'agent' and contract in ('designer-json-v1', 'reviewer-json-v1'):
+        from .output_contracts import original_signature
+        violation = '정답 코드' in output
+        if contract == 'designer-json-v1':
+            obj = dict(description='정답 코드: mock violation fixture.' if violation else 'Mock 문제 설명입니다.',
+                       signature=original_signature(data['task_input']['prompt'], data['task_input'].get('entry_point')) or 'def unavailable():',
+                       inputs=['원본 입력'], outputs=['원본 출력'], examples=['원본에 명시되지 않음'], constraints=['원본에 명시되지 않음'])
+        else:
+            obj = dict(summary='정답 코드: mock violation fixture.' if violation else 'Mock 정적 검토입니다.',
+                       findings=[], uncertainties=[], limitations='실제 코드를 실행하지 않은 mock 정적 검토입니다.')
+        output = canonical(obj)
     return {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
              'content': [{'type': 'output_text', 'text': output}]}],
             'usage': {'input_tokens': 0, 'output_tokens': 0}, 'mock': True}
@@ -101,6 +125,13 @@ def agent_payload(snapshot, call, config, version, tool_result=None, previous_ou
                 inputs.append({'type': 'function_call_output', 'call_id': item['call_id'], 'output': canonical(tool_result)})
     payload = {'model': config['agent_model'], 'store': False, 'instructions': snapshot.role_prompt,
                'input': inputs, 'max_output_tokens': config['budget']['max_output_tokens']}
+    contract = None
+    profile = config.get('evaluation_profile', {})
+    if profile.get('version') == 3:
+        contract = profile['output_contracts'][call.role]
+        schema = profile['output_schemas'].get(contract)
+        if schema:
+            payload['text'] = {'format': {'type': 'json_schema', 'name': 'agent_output', 'strict': True, 'schema': schema}}
     if call.role == 'test_runner' and version == 0 and not previous_output:
         payload.update(tools=[TOOL], parallel_tool_calls=False)
-    return payload, {'kind': 'agent', 'role': call.role, 'version': version, 'data': data}
+    return payload, {'kind': 'agent', 'role': call.role, 'version': version, 'data': data, 'output_contract': contract}

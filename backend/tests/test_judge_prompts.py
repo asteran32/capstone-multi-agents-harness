@@ -23,17 +23,17 @@ def judge_file(tmp_path, monkeypatch):
 def test_yaml_changes_apply_to_new_runs_but_requests_use_frozen_prompts(database, judge_file):
     path, document = judge_file
     first_id = run_create()
-    document['common_rubric'] = '새 공통 판정 기준\nKeep this newline.\n'
-    document['role_rubrics'] = {role: f'New rubric for {role}' for role in ROLES}
-    document['retry_instruction'] = 'New validation retry instruction'
-    document['few_shot_examples']['code_reviewer'][0]['id'] = 'new-example-revision'
+    document['structured_evaluation']['common_rubric'] = '새 공통 판정 기준\nKeep this newline.\n'
+    document['structured_evaluation']['role_rubrics'] = {role: f'New rubric for {role}' for role in ROLES}
+    document['structured_evaluation']['retry_instruction'] = 'New validation retry instruction'
+    document['structured_evaluation']['few_shot_examples']['code_reviewer'][0]['id'] = 'new-example-revision'
     path.write_text(yaml.safe_dump(document, allow_unicode=True), encoding='utf-8')
     second_id = run_create()
     with db.transaction() as s:
         first = deepcopy(s.get(db.Run, first_id).config_snapshot)
         second = deepcopy(s.get(db.Run, second_id).config_snapshot)
     assert first['evaluation_version'] != second['evaluation_version']
-    assert second['evaluation_profile']['common_rubric'] == document['common_rubric']
+    assert second['evaluation_profile']['common_rubric'] == document['structured_evaluation']['common_rubric']
     # A missing/changed file must not affect a previously created run or its retries.
     path.unlink()
     for config in (first, second):
@@ -42,12 +42,12 @@ def test_yaml_changes_apply_to_new_runs_but_requests_use_frozen_prompts(database
             config['policy'], config['judge_model'], config['budget']['max_output_tokens'], profile)
         for role in ROLES:
             payload, data = evaluation_v2.judge_payload(
-                config, role, 'response-id', 'sha256', 'fixed response', {}, 'request', {},
+                config, role, 'response-id', 'sha256', 'fixed response', {}, 'request', {'output': {'fields': {'$': 'fixed response'}}},
                 {'failure_kind': 'schema', 'error': 'fixture'})
             assert payload['instructions'].startswith(profile['common_rubric'] + '\n' + profile['role_rubrics'][role])
             examples = json.loads(payload['instructions'].split('<judge_examples>\n')[1].split('\n</judge_examples>')[0])
             assert [e['id'] for e in examples] == [e['id'] for e in profile['few_shot_examples'][role]]
-            assert [e['expected_output'] for e in examples] == [e['expected'] for e in profile['few_shot_examples'][role]]
+            assert [e['expected'] for e in examples] == [e['expected'] for e in profile['few_shot_examples'][role]]
             assert 'few_shot_examples' not in data['policy']
             assert data['retry_feedback']['instruction'] == profile['retry_instruction']
             assert json.loads(payload['input'][-1]['content']) == data
@@ -61,7 +61,8 @@ def test_batch_freezes_one_file_revision_for_all_thirty_runs(database, judge_fil
     def changing_file():
         prompts = original()
         reads.append(prompts)
-        changed = {**document, 'common_rubric': 'File edited during batch creation'}
+        changed = deepcopy(document)
+        changed['structured_evaluation']['common_rubric'] = 'File edited during batch creation'
         path.write_text(yaml.safe_dump(changed), encoding='utf-8')
         return prompts
 
@@ -71,7 +72,7 @@ def test_batch_freezes_one_file_revision_for_all_thirty_runs(database, judge_fil
         runs = list(s.scalars(select(db.Run).where(db.Run.id.in_([i['run_id'] for i in batch.manifest]))))
         assert len(runs) == 30 and len(reads) == 1
         assert len({r.config_snapshot['evaluation_version'] for r in runs}) == 1
-        assert all(r.config_snapshot['evaluation_profile']['common_rubric'] == document['common_rubric'] for r in runs)
+        assert all(r.config_snapshot['evaluation_profile']['common_rubric'] == document['structured_evaluation']['common_rubric'] for r in runs)
 
 
 @pytest.mark.parametrize('field,value', [

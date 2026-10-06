@@ -41,6 +41,8 @@ class Policy(Strict):
     requirements: list[str]
     prohibitions: list[str]
     output_format: str = Field(min_length=1)
+    output_contract: Literal['designer-json-v1', 'reviewer-json-v1', 'runner-json-v1'] | None = Field(
+        default=None, exclude_if=lambda value: value is None)
     # Preserve the exact serialized policy/hash for historical policies without examples.
     few_shot_examples: list[AgentFewShot] = Field(default_factory=list, exclude_if=lambda value: not value)
 
@@ -50,6 +52,13 @@ class Policy(Strict):
         if any(not v.strip() for v in values):
             raise ValueError('빈 정책 항목은 허용하지 않습니다.')
         return values
+
+    @model_validator(mode='after')
+    def contract_matches_role(self):
+        allowed = {'problem_designer': 'designer-json-v1', 'code_reviewer': 'reviewer-json-v1', 'test_runner': 'runner-json-v1'}
+        if self.output_contract and self.output_contract != allowed[self.role]:
+            raise ValueError('역할과 출력 계약이 일치하지 않습니다.')
+        return self
 
 
 class PolicyDocument(Strict):
@@ -220,11 +229,26 @@ class JudgeFewShot(Strict):
     expected: JudgeResultV2
 
 
+class StructuredJudgePrompts(Strict):
+    common_rubric: PromptText
+    role_rubrics: dict[Role, PromptText]
+    retry_instruction: PromptText
+    few_shot_examples: dict[Role, list[dict]]
+
+    @field_validator('role_rubrics', 'few_shot_examples')
+    @classmethod
+    def all_roles(cls, values):
+        if set(values) != set(ROLES):
+            raise ValueError('Judge v3에 세 역할을 모두 정의해야 합니다.')
+        return values
+
+
 class JudgePromptDocument(Strict):
     common_rubric: PromptText
     role_rubrics: dict[Role, PromptText]
     retry_instruction: PromptText
     few_shot_examples: dict[Role, list[JudgeFewShot]] = Field(default_factory=dict)
+    structured_evaluation: StructuredJudgePrompts | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator('role_rubrics')
     @classmethod

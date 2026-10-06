@@ -2,6 +2,7 @@ import json
 
 from sqlalchemy import select
 
+from app import evaluation_v2, services
 from app import db, runtime
 from app.contracts import ROLES
 from app.providers import mock
@@ -10,6 +11,8 @@ from test_batch_analytics import analytics
 
 
 def test_conflict_counts_are_evaluations_not_rule_count(database, monkeypatch):
+    # Frozen v2 runs retain the original Runner arbitration contract.
+    monkeypatch.setattr(services, 'evaluation_profile', lambda policy: evaluation_v2.evaluation_profile())
     c = client()
     batch = create(c, 'FULL')
     def respond(payload, context):

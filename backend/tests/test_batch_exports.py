@@ -108,7 +108,7 @@ def test_export_recovery_usage_retries_missing_values_and_formula_text(database)
     assert row['initial_verdict'] == 'violated' and row['final_verdict'] == 'compliant'
     assert row['recovery_attempted'] == 'true' and row['response_count'] == '2'
     assert row['selected_response_version'] == '1' and row['reset_reason'] == 'confirmed_violation_feedback'
-    assert row['recovery_strategy'] == 'feedback' and row['csv_schema_version'] == '3'
+    assert row['recovery_strategy'] == 'feedback' and row['csv_schema_version'] == '4'
     assert json.loads(row['recovery_feedback'])['confirmed_violations'][0]['source'] == 'lexical'
     assert row['recovery_verdict'] == 'compliant'
     assert json.loads(row['recovery_judgment_resolution'])['aggregate_verdict'] == 'compliant'

@@ -18,9 +18,13 @@ def load_judge_prompts():
         raise ValueError(f'Judge 프롬프트 파일을 읽을 수 없습니다 ({JUDGE_POLICY}): {exc}') from exc
 
 
-def evaluation_profile():
+def evaluation_profile(policy=None):
     # Load once when creating a new evaluation config; requests use its frozen copy.
     prompts = load_judge_prompts()
+    if policy is not None:
+        from .evaluation_v3 import profile
+        return profile(policy, prompts)
+    prompts.pop('structured_evaluation', None)
     return {'version': 2, 'logic': 'guardrail-2', 'input_protocol': 'separated-target-1',
             'retry_protocol': 'validation-feedback-1', **prompts,
             'judge_schema': JudgeResultV2.model_json_schema()}
@@ -28,7 +32,7 @@ def evaluation_profile():
 
 def is_v2(config):
     profile = config.get('evaluation_profile')
-    if profile and profile.get('version') != 2:
+    if profile and profile.get('version') not in (2, 3):
         raise ValueError('Unsupported evaluation profile; refusing to reuse another version')
     return bool(profile)
 
@@ -38,6 +42,9 @@ def judge_payload(config, role, response_id, response_sha256, text, task_input, 
     """One frozen protocol for online judging and fixed-corpus re-evaluation."""
     if not is_v2(config):
         raise ValueError('Version 2 evaluation profile required')
+    if config['evaluation_profile']['version'] == 3:
+        from .evaluation_v3 import judge_payload as v3_payload
+        return v3_payload(config, role, response_id, response_sha256, text, task_input, user_prompt, execution, retry_feedback)
     profile = config['evaluation_profile']
     policy = next(p for p in config['policy']['roles'] if p['role'] == role)
     # Agent demonstrations are not extra policy requirements or Judge targets.
@@ -174,8 +181,9 @@ def recovery_feedback(response, evaluation):
                            'instruction': 'Do not output these forbidden strings, including in denials or explanations.'})
     rules = (evaluation.judgment_resolution or {}).get('effective_rules', evaluation.judge_result or {})
     for rule, value in rules.items():
-        if value.get('verdict') == 'violated' and value.get('authority', 'judge') == 'judge':
-            violations.append({'source': 'judge', 'rule': rule, **value})
+        for item in value.get('criteria', [value]):
+            if item.get('verdict') == 'violated' and item.get('authority', 'judge') == 'judge':
+                violations.append({'source': 'judge', 'rule': rule, **item})
     execution = evaluation.execution_evidence or {}
     for criterion, value in execution.get('checks', {}).items():
         if value.get('verdict') == 'violated':

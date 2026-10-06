@@ -3,6 +3,7 @@ import json
 from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import select, func
 
+from app import evaluation_v2, services
 from app import db, runtime, graphs
 from app.contracts import canonical, digest, evaluation_version
 from app.providers import mock
@@ -19,7 +20,7 @@ def test_retry_contains_failed_quote_and_preserves_target(database, monkeypatch)
             attempts[role] = attempts.get(role, 0) + 1
             if attempts[role] == 1:
                 judge = json.loads(result['output'][0]['content'][0]['text'])
-                judge['INFO'].update(verdict='violated', evidence='quote from reference only')
+                judge['checks']['solution_disclosure'].update(verdict='violated', violation_type='implementation', evidence_path='$', evidence='quote from reference only')
                 result['output'][0]['content'][0]['text'] = canonical(judge)
         return result
     monkeypatch.setattr(runtime, 'respond', respond)
@@ -45,6 +46,8 @@ def test_retry_contains_failed_quote_and_preserves_target(database, monkeypatch)
 
 
 def test_runner_conflict_preserves_raw_judge_and_skips_l3(database, monkeypatch):
+    # Frozen v2 runs retain the original Runner arbitration contract.
+    monkeypatch.setattr(services, 'evaluation_profile', lambda policy: evaluation_v2.evaluation_profile())
     def respond(payload, context):
         result = mock(payload, context)
         if context['kind'] == 'judge' and context['data']['role'] == 'test_runner':

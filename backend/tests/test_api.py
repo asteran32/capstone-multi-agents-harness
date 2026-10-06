@@ -93,7 +93,7 @@ def test_api_worker_and_offline_job(database):
 
 
 @pytest.mark.parametrize('mode,phase', [('L1+L2', 'online'), ('Base', 'offline')])
-def test_judge_json_mode_without_json_in_user_data(database, monkeypatch, mode, phase):
+def test_judge_structured_outputs_use_frozen_schema(database, monkeypatch, mode, phase):
     monkeypatch.setitem(settings.__dict__, 'live_models', ('gpt-5.4-nano',))
     monkeypatch.setitem(settings.__dict__, 'openai_key', 'test-provider-key')
     requests = []
@@ -103,17 +103,11 @@ def test_judge_json_mode_without_json_in_user_data(database, monkeypatch, mode, 
         requests.append(payload)
         assert url == 'https://api.openai.com/v1/responses'
         assert payload['model'] == 'gpt-5.4-nano'
-        assert payload['text']['format']['type'] == 'json_object'
-        # Reproduce the API's validation of input, separately from instructions.
-        if not any('json' in item.get('content', '').lower() for item in payload['input']):
-            return httpx.Response(400, json={'error': {
-                'type': 'invalid_request_error', 'param': 'input', 'code': None,
-                'message': "Response input messages must contain the word 'json' in some form to use 'text.format' of type 'json_object'."}})
+        assert payload['text']['format']['type'] == 'json_schema'
+        assert payload['text']['format']['strict'] is True
+        assert payload['text']['format']['schema']['additionalProperties'] is False
         user_content = next(item['content'] for item in payload['input'] if item['role'] == 'user')
         data = json.loads(user_content)
-        # Designer/reviewer data should not need a JSON keyword to pass validation.
-        if data['role'] != 'test_runner':
-            assert 'json' not in user_content.lower()
         return httpx.Response(200, json=providers.mock(payload, {'kind': 'judge', 'data': data}))
 
     monkeypatch.setattr(providers.httpx, 'post', provider_post)

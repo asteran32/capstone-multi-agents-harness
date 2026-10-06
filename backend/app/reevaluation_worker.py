@@ -1,10 +1,11 @@
 """Judge-only durable execution; never generates responses, runs tools, or repairs agents."""
+from .evaluator import is_v3, server_checks, validate_judgment, resolve_evaluation
 from sqlalchemy import select, func
 from . import runtime
 from .contracts import canonical, digest, evaluation_version
 from .db import (transaction, Reevaluation, ReviewSet, ReviewCase, ReevaluationResult, ReevaluationRequest)
-from .evaluation import lexical, check_judge, uncertain
-from .evaluation_v2 import judge_payload, runner_checks, resolve_judgment
+from .evaluation import lexical, uncertain
+from .evaluation_v2 import judge_payload
 from .providers import respond, ProviderError
 from .runtime import Cancelled, BudgetExceeded
 from .reevaluation import cases_for, check_corpus
@@ -75,7 +76,10 @@ def evaluate_case(run_id, result_id):
         data, role = case.data, case.role
         result = dict(row.result)
         result.setdefault('lexical_result', lexical(data['raw_text'], config['policy']['forbidden_terms']))
-        result.setdefault('execution_evidence', runner_checks(role, data['raw_text'], data['task_input'], data.get('tool')))
+        result.setdefault('execution_evidence', server_checks(config, role, data['raw_text'], data['task_input'], data.get('tool'), data.get('output_contract')))
+        if is_v3(config):
+            from .evaluation_v3 import lexical_output
+            result['lexical_result'] = lexical_output(data['raw_text'], config['policy']['forbidden_terms'], result['execution_evidence'])
         result.setdefault('validation_attempts', [])
         row.result, row.status = result, 'running'
     attempts = result['validation_attempts']
@@ -91,20 +95,20 @@ def evaluate_case(run_id, result_id):
                 raise ProviderError('Incomplete Judge response', raw)
             raw_text = ''.join(part.get('text', '') for item in raw.get('output', []) if item.get('type') == 'message'
                                for part in item.get('content', []) if part.get('type') == 'output_text')
-            judge, validation = check_judge(raw_text, data['raw_text'], role, v2=True)
+            judge, validation = validate_judgment(config, raw_text, data['raw_text'], role, result['execution_evidence'])
         except (ProviderError, BudgetExceeded) as exc:
             judge = None
             validation = {'valid': False, 'schema_valid': None, 'evidence_valid': None,
                           'evidence_required': None, 'failed_rules': [], 'error': str(exc),
                           'failure_kind': 'budget' if isinstance(exc, BudgetExceeded) else 'provider'}
-        validation = {**validation, 'schema_version': 3, 'attempt': len(attempts) + 1, 'judge_output': raw_text}
+        validation = {**validation, 'schema_version': 4 if is_v3(config) else 3, 'attempt': len(attempts) + 1, 'judge_output': raw_text}
         attempts = [*attempts, validation]
         result = {**result, 'validation_attempts': attempts,
                   'judge_result': judge if validation['valid'] else uncertain(validation['error'] or 'Judge failed')}
         with transaction() as s:
             s.get(ReevaluationResult, result_id).result = result
     check_cancel(run_id)
-    resolution = resolve_judgment(result['lexical_result'], result['judge_result'], result['execution_evidence'], attempts[-1]['valid'])
+    resolution = resolve_evaluation(config, result['lexical_result'], result['judge_result'], result['execution_evidence'], {**attempts[-1], 'attempts': attempts})
     with transaction() as s:
         row = s.get(ReevaluationResult, result_id)
         row.result = {**result, 'judgment_resolution': resolution, 'aggregate_verdict': resolution['aggregate_verdict']}

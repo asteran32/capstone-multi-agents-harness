@@ -19,6 +19,7 @@ def complete(s, call, text='approved output', version=0, phase='online'):
     evaluation = db.Evaluation(response_id=response.id, phase=phase,
         evaluation_version=s.get(db.Run, call.run_id).config_snapshot['evaluation_version'],
         status='completed', aggregate_verdict='compliant', evidence_validation={'valid': True},
+        judgment_resolution={'history_eligible': True},
         judge_result={rule: {'verdict': 'compliant', 'reason': 'fixture', 'evidence': ''}
                       for rule in ('INFO', 'SCOPE', 'EXEC')})
     s.add(evaluation)
@@ -48,8 +49,10 @@ def test_history_waits_for_valid_compliant_selected_output(database, invalid):
         elif invalid.startswith('judge_'):
             rule = invalid.removeprefix('judge_')
             ev.judge_result = {**ev.judge_result, rule: {'verdict': 'uncertain'}}
+            ev.judgment_resolution = {'history_eligible': False}
         elif invalid == 'missing_judge':
             ev.judge_result = None
+            ev.judgment_resolution = None
         elif invalid == 'wrong_version':
             ev.evaluation_version = 'other-version'
         elif invalid == 'wrong_phase':

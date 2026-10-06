@@ -6,8 +6,10 @@ from langgraph.graph import StateGraph, START, END
 
 from .contracts import (MODES, RUBRIC, JUDGE_JSON_INSTRUCTION, JudgeResult, RunnerReport, canonical, digest)
 from .db import (transaction, Call, Run, Snapshot, Response, Evaluation, ToolExecution, now)
-from .evaluation import lexical, check_judge, uncertain, execution_evidence, aggregate, metrics
-from .evaluation_v2 import is_v2, runner_checks, resolve_judgment, recovery_feedback, judge_payload
+from .evaluation import lexical, uncertain, execution_evidence, aggregate, metrics
+from .evaluation_v2 import is_v2, recovery_feedback, judge_payload
+from .evaluator import is_v3, server_checks, validate_judgment, resolve_evaluation
+from .output_contracts import parse_output
 from .providers import agent_payload, normalize, ProviderError
 from .runtime import model_operation, execute_tool, check_cancel, BudgetExceeded, ToolDenied
 from .services import ensure_snapshot, log
@@ -127,7 +129,10 @@ def persist_response(state):
         if not row:
             text = state['agent_result']['text']
             parsed, error = None, None
-            if state['role'] == 'test_runner':
+            config = s.get(Run, state['run_id']).config_snapshot
+            if is_v3(config):
+                parsed, error = parse_output(text, config['evaluation_profile']['output_contracts'][state['role']])
+            elif state['role'] == 'test_runner':
                 try:
                     parsed = RunnerReport.model_validate_json(text).model_dump()
                 except ValueError as exc:
@@ -186,8 +191,11 @@ def judge(state):
         if is_v2(config):
             ev = s.get(Evaluation, state['evaluation_id'])
             if ev.execution_evidence is None:
-                ev.execution_evidence = runner_checks(call.role, response.raw_text, snapshot.task_input,
+                ev.execution_evidence = server_checks(config, call.role, response.raw_text, snapshot.task_input,
                     {'status': tool.status, 'arguments': tool.arguments, 'result': tool.result} if tool else None)
+            if is_v3(config):
+                from .evaluation_v3 import lexical_output
+                ev.lexical_result = lexical_output(response.raw_text, config['policy']['forbidden_terms'], ev.execution_evidence)
             payload, data = judge_payload(config, call.role, response.id, response.response_sha256,
                 response.raw_text, snapshot.task_input, call.user_prompt, ev.execution_evidence,
                 (ev.evidence_validation or {}) if state['judge_attempt'] else None)
@@ -218,9 +226,9 @@ def validate(state):
                           'evidence_required': None, 'evidence_valid': None, 'failed_rules': [],
                           'failure_kind': state.get('judge_error_kind') or 'unknown', 'error': error}
         else:
-            result, validation = check_judge(state['judge_raw'], response.raw_text, state['role'], is_v2(config))
+            result, validation = validate_judgment(config, state['judge_raw'], response.raw_text, state['role'], ev.execution_evidence)
         if is_v2(config):
-            validation = {**validation, 'schema_version': 3, 'judge_output': state.get('judge_raw', '')}
+            validation = {**validation, 'schema_version': 4 if is_v3(config) else 3, 'judge_output': state.get('judge_raw', '')}
         valid, error = validation['valid'], validation['error']
         validation['attempt'] = state['judge_attempt'] + 1
         previous = ev.evidence_validation or {}
@@ -252,11 +260,11 @@ def aggregate_node(state):
         evidence = execution_evidence(call.role, response.raw_text, tool.result if tool else None)
         if is_v2(config):
             snapshot = s.get(Snapshot, state['input_snapshot_id'])
-            evidence = ev.execution_evidence or runner_checks(call.role, response.raw_text, snapshot.task_input,
+            evidence = ev.execution_evidence or server_checks(config, call.role, response.raw_text, snapshot.task_input,
                 {'status': tool.status, 'arguments': tool.arguments, 'result': tool.result} if tool else None)
         ev.execution_evidence = evidence
         if is_v2(config):
-            ev.judgment_resolution = resolve_judgment(ev.lexical_result, ev.judge_result, evidence, state['judge_valid'])
+            ev.judgment_resolution = resolve_evaluation(config, ev.lexical_result, ev.judge_result, evidence, ev.evidence_validation)
             ev.aggregate_verdict = ev.judgment_resolution['aggregate_verdict']
         else:
             ev.aggregate_verdict = aggregate(ev.lexical_result, ev.judge_result, evidence)

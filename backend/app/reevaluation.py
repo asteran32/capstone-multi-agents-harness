@@ -9,6 +9,7 @@ from .db import (ReviewSet, ReviewCase, Reevaluation, ReevaluationResult, Reeval
 from .evaluation_v2 import evaluation_profile
 from .services import Conflict
 from .validation_cases import validation_cases
+from .output_contracts import contract_for
 
 
 def create_review_set(s, batch, body, key):
@@ -32,7 +33,7 @@ def create_review_set(s, batch, body, key):
         raise ValueError('서버에 등록되지 않은 Judge 모델입니다.')
     raw = body.policy_raw if body.policy_raw is not None else original['policy_raw']
     policy = parse_policy(raw).model_dump()
-    profile = evaluation_profile()
+    profile = evaluation_profile(policy)
     config = {**body.model_dump(mode='json'), 'policy_raw': raw, 'policy': policy,
               'evaluation_profile': profile, 'transport_attempts': 2, 'judge_attempts': 2,
               'policy_changed': digest(policy) != digest(original['policy']),
@@ -69,6 +70,7 @@ def create_review_set(s, batch, body, key):
                 'response_sha256': response.response_sha256, 'snapshot_id': snapshot.id,
                 'snapshot_sha256': snapshot.content_sha256, 'task_input': snapshot.task_input,
                 'role_prompt': snapshot.role_prompt, 'ordered_history': snapshot.ordered_history,
+                'output_contract': contract_for(next(p for p in config_original['policy']['roles'] if p['role'] == call.role)),
                 'recovery_feedback': snapshot.recovery_feedback, 'user_prompt': call.user_prompt,
                 'tool': {k: getattr(tool, k) for k in ('id', 'status', 'arguments', 'result', 'stdout', 'stderr', 'junit_xml')} if tool else None,
                 'baseline': {k: v for k, v in record(baseline).items() if k != 'created_at'} if baseline else None}

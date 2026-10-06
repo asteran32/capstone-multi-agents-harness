@@ -24,7 +24,7 @@ COLUMNS = (
     'analysis_revision', 'm4_threshold',
     'batch_index', 'source_task_id', 'task_id', 'task_sha256', 'source_version', 'candidate_id', 'candidate_sha256',
     'run_id', 'mode', 'agent_model', 'judge_model', 'sandbox_mode', 'rounds', 'policy_hash', 'evaluation_version',
-    'max_requests', 'run_status', 'generation_job_status', 'offline_job_status', 'run_error', 'job_errors',
+    'output_contract', 'evaluator_generation', 'max_requests', 'run_status', 'generation_job_status', 'offline_job_status', 'run_error', 'job_errors',
     'call_id', 'call_seq', 'round_index', 'role', 'call_status', 'started_at', 'finished_at', 'generation_duration_ms',
     'user_prompt', 'call_error', 'history_count', 'recovery_attempted', 'reset_reason', 'response_count',
     'recovery_strategy', 'recovery_feedback', 'recovery_effect',
@@ -130,7 +130,7 @@ def batch_results_csv(s, batch):
         final_ev = evaluations.get((selected.id, phase, config['evaluation_version'])) if selected else None
         recovery_ev = evaluations.get((recovery.id, phase, config['evaluation_version'])) if recovery else None
         row = {
-            'csv_schema_version': 3, 'exported_at': exported_at, 'batch_id': batch.id,
+            'csv_schema_version': 4, 'exported_at': exported_at, 'batch_id': batch.id,
             'analysis_revision': (batch.analysis_settings or {}).get('revision', 0),
             'm4_threshold': (batch.analysis_settings or {}).get('m4_threshold'),
             'source_batch_id': batch.source_batch_id, 'batch_status': summary['status'], 'batch_created_at': batch.created_at,
@@ -138,6 +138,8 @@ def batch_results_csv(s, batch):
                 'source_version', 'candidate_id', 'candidate_sha256')},
             'run_id': run.id, 'mode': run.mode,
             **{key: config.get(key) for key in ('agent_model', 'judge_model', 'sandbox_mode', 'rounds', 'policy_hash', 'evaluation_version')},
+            'output_contract': config.get('evaluation_profile', {}).get('output_contracts', {}).get(call.role),
+            'evaluator_generation': config.get('evaluation_profile', {}).get('version', 1),
             'max_requests': config['budget']['max_requests'], 'run_status': run.status,
             'generation_job_status': run_jobs['run'].status,
             'offline_job_status': run_jobs['offline'].status if 'offline' in run_jobs else None,

@@ -12,7 +12,7 @@ from .exports import usage_summary
 from .evaluation_v2 import recovery_effect, uncertainty_reasons
 
 VERDICTS = ('violated', 'compliant', 'uncertain')
-FAILURE_KINDS = ('schema', 'evidence_missing', 'evidence_mismatch', 'provider', 'budget', 'unknown')
+FAILURE_KINDS = ('schema', 'evidence_missing', 'evidence_mismatch', 'authority_conflict', 'unexpected_evidence', 'provider', 'budget', 'unknown')
 
 
 def fraction(numerator, denominator):
@@ -182,7 +182,7 @@ def batch_analytics(s, batch):
         if call.status == 'unresolved':
             reasons = uncertainty_reasons(latest_ev)
             cause = 'violation_persisted' if latest_ev and latest_ev.aggregate_verdict == 'violated' else \
-                next((r for r in ('judge_error', 'judgment_conflict', 'execution_evidence', 'semantic_uncertainty') if r in reasons), 'unknown')
+                next((r for r in ('judge_error', 'judgment_conflict', 'server_check_uncertainty', 'execution_evidence', 'semantic_uncertainty') if r in reasons), 'unknown')
             unresolved_reasons[cause] += 1
             event('unresolved', call, '복구 후 응답 미선택', latest.response_version if latest else 1,
                   primary_cause=cause, contributing_causes=reasons, verdict=latest_ev.aggregate_verdict if latest_ev else None)
@@ -248,10 +248,10 @@ def batch_analytics(s, batch):
         contract_failures = {key: value for key, value in (ev.execution_evidence or {}).get('checks', {}).items()
                              if key != 'runner_report' and value.get('verdict') == 'violated'}
         if contract_failures:
-            event('server_violation', call, 'Runner 출력 형식 또는 고정 실행 입력 위반', response.response_version,
+            event('server_violation', call, '역할 출력 규격 또는 고정 실행 입력 위반', response.response_version,
                   checks=contract_failures)
-        if call.role == 'test_runner' and ev.status in ('completed', 'error'):
-            conflict_counts['runner_evaluations'] += 1
+        if ev.status in ('completed', 'error') and (call.role == 'test_runner' or (ev.execution_evidence or {}).get('schema_version') == 3):
+            conflict_counts['eligible_evaluations'] += 1
         if resolution.get('conflict_checked'):
             conflict_counts['checked'] += 1
             if resolution.get('conflicts'):
@@ -369,7 +369,7 @@ def batch_analytics(s, batch):
                         for scope, counts in uncertainty_counts.items()},
         'conflicts': {'rate': fraction(conflict_counts['conflicting'], conflict_counts['checked']),
                       'initial': conflict_counts['initial'], 'recovery': conflict_counts['recovery'],
-                      'unmeasured': conflict_counts['runner_evaluations'] - conflict_counts['checked']},
+                      'unmeasured': max(0, conflict_counts['eligible_evaluations'] - conflict_counts['checked'])},
         'threshold': {'value': threshold, 'eligible': len(threshold_observations),
             'warmup': sum(d['warmup'] for d in role_data.values()), 'missing': sum(d['missing_window'] for d in role_data.values()),
             'exceedances': exceeded if threshold is not None and threshold_observations else None,

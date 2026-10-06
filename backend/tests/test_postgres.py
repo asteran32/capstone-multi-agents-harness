@@ -138,7 +138,7 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     assert rows[0]['evaluation_phase'] == 'offline' and rows[0]['initial_verdict'] == 'compliant'
     assert rows[0]['agent_total_tokens'] == rows[0]['judge_total_tokens'] == '0'
     assert rows[-1]['call_status'] == 'cancelled' and rows[-1]['agent_total_tokens'] == ''
-    assert rows[0]['csv_schema_version'] == '3' and rows[0]['m4_threshold'] == '0.2'
+    assert rows[0]['csv_schema_version'] == '4' and rows[0]['m4_threshold'] == '0.2'
     assert rows[0]['analysis_revision'] == '1' and rows[0]['initial_schema_valid'] == 'true'
     # Independent re-evaluation tables/queue work on PostgreSQL without changing source records.
     from app.reevaluation import create_review_set, cases_for, update_label, seal_review, start_reevaluation, execution_summary

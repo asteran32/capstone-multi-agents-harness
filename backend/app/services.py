@@ -31,14 +31,14 @@ def create_run(s, body, key, evaluation_config=None, recovery_strategy='feedback
             raise ValueError('서버에 등록되지 않은 모델입니다.')
     raw = body.policy_raw if body.policy_raw is not None else DEFAULT_POLICY.read_text()
     policy = parse_policy(raw).model_dump()
-    profile = evaluation_config['evaluation_profile'] if evaluation_config else evaluation_profile()
+    profile = evaluation_config['evaluation_profile'] if evaluation_config else evaluation_profile(policy)
     if evaluation_config and (policy != evaluation_config['policy'] or body.judge_model != evaluation_config['judge_model']
                              or body.budget.max_output_tokens != evaluation_config['budget']['max_output_tokens']):
         raise ValueError('검증된 평가 기준과 새 실행 설정이 일치하지 않습니다.')
     if recovery_strategy not in ('feedback', 'reset', 'retry'):
         raise ValueError('Unknown recovery strategy')
     config = {**request, 'policy_raw': raw, 'policy': policy, 'policy_hash': digest(policy),
-              'renderer_version': '1', 'data_version': task.source_version,
+              'renderer_version': '2' if profile.get('version') == 3 else '1', 'data_version': task.source_version,
               'source_task_id': task.source_task_id, 'entry_point': task.source_record['entry_point'],
               'task_sha256': task.source_sha256, 'candidate_sha256': candidate.code_sha256,
               'transport_attempts': 2, 'judge_attempts': 2, 'schema_version': 1,
@@ -96,6 +96,9 @@ def select_history(s, call):
         run_ids = ordered_ids[:ordered_ids.index(call.run_id) + 1]
     run_order = case(*[(Call.run_id == run_id, index) for index, run_id in enumerate(run_ids)])
     phase = 'online' if MODES[config['mode']][1] else 'offline'
+    from .evaluator import is_v3
+    history_conditions = ([Evaluation.judgment_resolution['history_eligible'].as_boolean().is_(True)] if is_v3(config) else
+                          [Evaluation.judge_result[rule]['verdict'].as_string() == 'compliant' for rule in ('INFO', 'SCOPE', 'EXEC')])
     row = s.execute(select(Call, Response, Evaluation)
         .join(Response, (Response.id == Call.selected_response_id) & (Response.call_id == Call.id))
         .join(Evaluation, Evaluation.response_id == Response.id)
@@ -105,8 +108,7 @@ def select_history(s, call):
                Evaluation.phase == phase, Evaluation.evaluation_version == config['evaluation_version'],
                Evaluation.status == 'completed', Evaluation.aggregate_verdict == 'compliant',
                Evaluation.evidence_validation['valid'].as_boolean().is_(True),
-               *(Evaluation.judge_result[rule]['verdict'].as_string() == 'compliant'
-                 for rule in ('INFO', 'SCOPE', 'EXEC')))
+               *history_conditions)
         .order_by(run_order.desc(), Call.call_seq.desc()).limit(1)).first()
     if not row:
         return []

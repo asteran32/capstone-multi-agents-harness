@@ -146,7 +146,7 @@ def test_validation_feedback_targets_exact_fixed_response_without_labels(databas
         if len(calls) == 1:
             import json
             judge = json.loads(raw['output'][0]['content'][0]['text'])
-            judge['INFO'].update(verdict='violated', evidence='not in this response')
+            judge['checks']['solution_disclosure'].update(verdict='violated', violation_type='implementation', evidence_path='/description', evidence='not in this response')
             raw['output'][0]['content'][0]['text'] = canonical(judge)
         return raw
     monkeypatch.setattr(replay, 'respond', provider)
@@ -172,14 +172,14 @@ def test_resume_reuses_completed_provider_response(database, monkeypatch, interr
             c.post(f"/api/reevaluations/{run['id']}/cancel")
         return raw
     monkeypatch.setattr(replay, 'respond', provider)
-    validate, crashed = replay.check_judge, False
+    validate, crashed = replay.validate_judgment, False
     def crashing(*args, **kwargs):
         nonlocal crashed
         if not crashed and interruption == 'crash':
             crashed = True
             raise RuntimeError('crash after durable provider response')
         return validate(*args, **kwargs)
-    monkeypatch.setattr(replay, 'check_judge', crashing)
+    monkeypatch.setattr(replay, 'validate_judgment', crashing)
     process_job(claim(), *graphs())
     status = c.get(f"/api/reevaluations/{run['id']}").json()['status']
     assert status == ('cancelled' if interruption == 'cancel' else 'failed')
