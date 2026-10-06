@@ -141,7 +141,7 @@ Reset은 해당 복구 요청의 입력 context에만 적용한다. PostgreSQL�
 
 - 새 실행은 `history_limit=1`이다. 같은 배치의 앞선 문제·Round에서 같은 역할의 최신 준수 출력 1개를 선택한다. 단독 Run은 같은 Run의 이전 Round만 검색한다.
 - 배치의 첫 문제·첫 Round는 빈 배열이다. 해당 역할에 준수 출력이 생기기 전까지 계속 비어 있으며, 새 준수 출력이 없으면 이전 준수 출력 1개를 유지한다.
-- 완료된 호출의 최종 선택 응답만 후보로 삼는다. 현재 평가 버전과 일치하고 평가 상태가 completed, schema/evidence 검증이 유효하며 Judge INFO/SCOPE/EXEC와 종합 판정이 모두 compliant여야 한다.
+- 완료된 호출의 최종 선택 응답만 후보로 삼는다. 현재 평가 버전과 일치하고 평가 상태가 completed, schema/evidence 검증이 유효하고 종합 판정이 compliant여야 한다. 새 평가기 v3는 서버·Judge의 최종 적용 기준으로 계산한 history_eligible을 요구한다. 구형 평가기는 원래 Judge INFO/SCOPE/EXEC 모두 compliant 조건을 유지한다.
 - 실패·취소·미해결·위반·불확실·평가 오류·미평가는 제외한다. L3 복구가 준수하면 복구 출력만 채택하며 최초 위반 출력을 함께 넣지 않는다.
 - 출력 원문 `raw_text`, 출처 문제 `source_task_id`, call/response/evaluation ID와 응답 버전만 포함한다. 과거 입력·요청·코드·다른 역할 출력·Judge 설명·도구 결과는 첨부하지 않는다.
 - 다른 배치 및 모드 변경 재실행의 원본 배치에서 이력을 가져오지 않는다. 순서는 batch manifest와 call_seq로 판단하며 미래 작업을 제외한다.
@@ -481,3 +481,7 @@ Base/L1의 비교 평가는 별도 사후 평가로 제공하세요.
 ```
 
 데이터 출처는 [OpenAI HumanEval 저장소](https://github.com/openai/human-eval)이며 사용한 버전·해시를 기록한다. LangGraph 구현은 [공식 persistence 문서](https://docs.langchain.com/oss/python/langgraph/persistence)와 [Python API reference](https://reference.langchain.com/python/langgraph/overview)를 확인하고 호환 의존성 버전을 고정한다.
+
+## 2026-10-06 구조화 응답 및 평가기 v3
+
+새 기본 정책 1.3.0과 `guardrail-3.0`은 역할 JSON 계약·서버 형식 검사·의미 기준별 Judge를 분리한다. 구체적인 적용 기준과 호환성, 검증 결과는 [구현 기록](judge_structured_validation_plan_ko.md)을 따른다. 이전 평가·응답·스냅샷은 변경하지 않는다.

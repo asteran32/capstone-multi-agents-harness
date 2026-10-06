@@ -43,7 +43,7 @@ make down
 |---|---|
 | 실행 | Base / L1 / L1+L2 / FULL, round 및 역할 순서 고정, 취소·미완료 작업 재개 |
 | L1 | 모드별 강화 프롬프트, 역할별 입력 DTO, 서버 측 도구 권한 |
-| L2 | NFKC·casefold 금지 문자열 검사, 역할별 Judge INFO/SCOPE/EXEC, 원문 인용 검증·오류 피드백 재시도, Runner 서버 검사와 판정 충돌 처리 |
+| L2 | NFKC·casefold 금지 문자열 검사, 역할별 서버 형식 검사와 의미 기준별 Judge, 필드 인용 검증·오류 피드백 재시도, INFO/SCOPE/EXEC 집계와 판정 충돌 처리 |
 | L3 | 새 FULL 실행은 최초 위반 시 검증된 history를 유지하고 원본 응답·확인된 위반을 전달하는 feedback 복구 최대 1회. reset 비교 전략은 history 제거, 기존 실행의 전략과 최초·복구 기록 보존 |
 | History | 같은 배치·같은 역할의 최신 준수 출력 최대 1개, 단독 Run은 자기 Run 안에서만 선택, 실제 입력 snapshot 고정 |
 | 지표 | 최초 응답 기준 최근 5회 M1~M4, V/C/U, coverage, warmup, null 및 disabled 구분 |
@@ -77,7 +77,7 @@ make down
 
 각 배치는 빈 이력에서 시작합니다. HumanEval/0의 첫 Round는 세 역할 모두 `history: []`이며, 이후에는 같은 배치의 앞선 문제·Round에서 **자기 역할의 최신 준수 출력 1개**만 전달합니다. 준수 출력이 아직 없으면 계속 비워 두고, 이후 위반·불확실이 발생해도 이전 준수 출력은 유지합니다. 다른 역할·다른 배치·재실행 원본 배치의 출력은 가져오지 않습니다. 단독 Run에서는 같은 Run의 이전 Round만 검색합니다.
 
-이력 채택 조건은 완료된 호출의 **최종 선택 응답**, 현재 실행과 같은 평가 버전, 유효한 schema/evidence 검증, Judge의 INFO/SCOPE/EXEC 모두 `compliant`, 최종 종합 판정 `compliant`입니다. L3 복구가 준수로 완료되면 복구 출력만 채택하고 최초 위반 출력은 제외합니다. 이력에는 `raw_text`와 출처 문제·call·response·evaluation ID 및 응답 버전만 포함합니다. 과거 문제·코드 입력, 사용자 요청, 다른 역할 출력, Judge 설명, 도구 결과는 첨부하지 않습니다. Runner는 과거 성공 보고를 현재 테스트의 실행 근거로 사용하지 않습니다.
+이력 채택 조건은 완료된 호출의 **최종 선택 응답**, 현재 실행과 같은 평가 버전, 유효한 schema/evidence 검증, 최종 종합 판정 `compliant`입니다. 평가기 v3는 서버·Judge의 최종 적용 기준이 모두 준수인 `history_eligible`을 요구하며, 구형 평가기는 원래 Judge INFO/SCOPE/EXEC 모두 준수 조건을 유지합니다. L3 복구가 준수로 완료되면 복구 출력만 채택하고 최초 위반 출력은 제외합니다. 이력에는 `raw_text`와 출처 문제·call·response·evaluation ID 및 응답 버전만 포함합니다. 과거 문제·코드 입력, 사용자 요청, 다른 역할 출력, Judge 설명, 도구 결과는 첨부하지 않습니다. Runner는 과거 성공 보고를 현재 테스트의 실행 근거로 사용하지 않습니다.
 
 L1의 자동 사후 평가를 끄면 준수 판정이 없어 이력이 쌓이지 않습니다. 켜면 이전 Run의 사후 평가가 끝난 후 다음 문제에 이력이 전달됩니다. 여러 Round인 L1에서는 현재 Run의 모든 생성이 끝나야 사후 평가가 시작되므로, 같은 Run 안에서는 이전 문제에서 얻은 이력이 유지됩니다. L1+L2/FULL은 각 호출의 온라인 평가 후 다음 Round에도 최신 이력을 사용할 수 있습니다. history 수집을 위한 추가 모델 요청은 없습니다.
 
@@ -104,7 +104,9 @@ L1의 자동 사후 평가를 끄면 준수 판정이 없어 이력이 쌓이지
 
 LLM Judge의 공통 판정 기준(`common_rubric`), 세 역할별 기준(`role_rubrics`), 검증 실패 재시도 지침(`retry_instruction`)은 [policies/judge.yaml](policies/judge.yaml)에서 편집합니다. Agent 역할 정책은 기존 [policies/default.yaml](policies/default.yaml)에서 관리합니다. Judge 파일의 필수 항목 누락·빈 문구·중복 키·잘못된 역할은 오류로 처리하며 기본 문구로 대체하지 않습니다.
 
-역할 경계 few-shot은 Agent 정책의 역할별 `few_shot_examples`와 Judge 파일의 역할별 `few_shot_examples`에서 관리합니다. 기본 정책 1.2.0에는 Agent 예시 10개(Designer 2, Reviewer 3, Runner 5), Judge 예시 19개(Designer 5, Reviewer 8, Runner 6)가 있습니다. HumanEval 실험 문제와 별도로 만든 예시이며, Agent에는 준수 응답을, Judge에는 참고 자료·평가 대상·규칙별 기대 JSON 판정을 제공합니다. Judge의 위반 예시는 정확한 증거 인용과 역할별 criterion_id를 파일 로딩 시 검증합니다. 예시의 라벨은 작성된 기대 판정이며 실제 모델의 성능 검증 결과가 아닙니다.
+새 실행은 Designer의 문제 설명·서명·입출력·예시·제약과 Reviewer의 요약·오류 목록·불확실 사항·한계를 JSON Schema로 반환합니다. Reviewer의 `findings: []`는 화면에서 “정적 검토에서 확인된 오류 없음”으로 표시하며 오류별 위치·원인·영향을 요구하지 않습니다. 원본 JSON과 파싱 결과는 보존됩니다. 서버가 확인한 허용 서명이나 오류 없음 문구 자체를 Judge가 위반 증거로 인용하면 Agent L3 대신 Judge 검증 재시도를 수행하고, 끝내 실패하면 평가 오류로 기록합니다. [설계와 검증 기록](docs/judge_structured_validation_plan_ko.md)을 참고하세요.
+
+역할 경계 few-shot은 Agent 정책의 역할별 `few_shot_examples`와 Judge 파일의 역할별 `few_shot_examples`에서 관리합니다. 기본 정책 1.3.0에는 Agent 예시 10개(Designer 2, Reviewer 3, Runner 5)가 있습니다. 새 Judge v3의 `structured_evaluation.few_shot_examples`에는 8개(Designer 3, Reviewer 4, Runner 1)가 있으며 기존 v2 예시 19개는 호환용으로 보존합니다. HumanEval 실험 문제와 별도로 만든 예시이며, Agent에는 준수 응답을, Judge에는 참고 자료·평가 대상·규칙별 기대 JSON 판정을 제공합니다. Judge의 위반 예시는 정확한 증거 인용과 역할별 기준 및 증거 경로를 평가 프로필 생성 시 검증합니다. 예시의 라벨은 작성된 기대 판정이며 실제 모델의 성능 검증 결과가 아닙니다.
 
 Agent 예시는 L1 / L1+L2 / FULL의 역할 프롬프트에만 포함됩니다. Judge는 평가 대상 역할의 예시만 받고, 실제 대상 응답과 예시를 분리합니다. Agent 예시를 Judge 정책 요구사항으로 다시 전달하지 않습니다. 예시 없는 기존 정책과 저장된 평가 프로필도 지원합니다. 기존 배치의 모드 변경 재실행은 이전 Agent 정책을 유지하고 Judge는 새 배치 생성 시 최신 파일을 읽습니다. 세 Agent에도 새 기본 예시를 적용하려면 화면을 새로고침하고 새 실험을 생성하세요. 이번 few-shot 추가는 평가 권한·서버 검사·L3 발동 조건을 변경하지 않습니다.
 
@@ -143,12 +145,13 @@ CSV는 **문제 × Round × 역할별 한 행**이며, 1 Round이면 헤더를 �
 
 | 열 | 의미 |
 |---|---|
-| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(3), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
+| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(4), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
 | `analysis_revision`, `m4_threshold` | 다운로드 시점의 분석 설정 revision과 threshold(0~1, 미설정은 빈 값) |
 | `batch_index`, `source_task_id`, `task_sha256`, `candidate_sha256`, `run_id` | 문제 순번, 데이터·후보 식별 및 Run 연결 |
 | `mode`, `agent_model`, `judge_model`, `sandbox_mode`, `policy_hash`, `evaluation_version`, `max_requests` | 실행 당시 고정된 비교 조건 |
 | `round_index`, `role`, `call_status`, `generation_job_status`, `offline_job_status` | Round·역할별 생성과 사후 평가 진행 상태 |
 | `initial_response_text`, `recovery_response_text`, `final_response_text`, `selected_response_version` | 최초·복구·최종 선택 응답. 아직 선택되지 않은 최종 응답은 빈 값 |
+| `output_contract`, `evaluator_generation` | 응답 출력 계약과 평가기 세대. 기존 기록에 없는 출력 계약은 공란 |
 | `evaluation_phase`, `initial_*`, `recovery_*`, `final_*` | L1은 Offline, L1+L2·FULL은 Online 평가. 최초·복구·최종 선택의 종합·Lexical·적용 INFO/SCOPE/EXEC 판정, 원래 Judge 근거와 인용·실행 검증 결과 |
 | `initial_schema_valid`, `initial_evidence_valid`, `initial_validation_failure_kind` 등 | 최초·복구·최종 선택 평가의 구조화된 검증 결과. `evidence_required`로 인용 검사 대상 여부 구분. 과거 미기록 값은 빈 값 |
 | `recovery_strategy`, `recovery_feedback`, `recovery_effect` | 복구 전략, 원본 응답·확인된 위반 피드백, 응답 변경·동일 응답 재판정·평가 오류 해소의 구분 |

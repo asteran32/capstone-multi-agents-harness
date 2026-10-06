@@ -182,7 +182,7 @@ FULL에서 최초 compliant 또는 uncertain은 최초 응답을 선택한다. �
 
 ### 입력 snapshot
 
-2026-10-06 이후 새 Run은 history_limit=1이다. 같은 batch manifest의 이전 Run과 현재 Run의 이전 call_seq에서 같은 역할의 최신 준수 출력 1개만 선택한다. 최종 선택 응답, 완료된 유효 평가, 같은 evaluation_version, Judge INFO/SCOPE/EXEC 모두 compliant, aggregate_verdict compliant가 필요하다. L1은 offline 평가, L1+L2/FULL은 online 평가를 사용한다. 최초 준수 출력 전에는 빈 배열이며 다른 배치·다른 역할·미래 작업은 제외한다. 단독 Run은 자기 Run 안에서만 선택한다. 기존 history_limit=5 Run은 과거 규칙을 유지한다.
+2026-10-06 이후 새 Run은 history_limit=1이다. 같은 batch manifest의 이전 Run과 현재 Run의 이전 call_seq에서 같은 역할의 최신 준수 출력 1개만 선택한다. 최종 선택 응답, 완료된 유효 평가, 같은 evaluation_version, aggregate_verdict compliant가 필요하다. 평가기 v3는 서버와 검증된 Judge의 최종 기준으로 계산한 history_eligible을 요구하고, 구형 평가기는 원래 Judge INFO/SCOPE/EXEC 모두 compliant 조건을 유지한다. L1은 offline 평가, L1+L2/FULL은 online 평가를 사용한다. 최초 준수 출력 전에는 빈 배열이며 다른 배치·다른 역할·미래 작업은 제외한다. 단독 Run은 자기 Run 안에서만 선택한다. 기존 history_limit=5 Run은 과거 규칙을 유지한다.
 
 History에는 자기 역할의 출력 raw_text와 source_task_id, call_id, response_id, response_version, evaluation_id만 넣는다. 과거 입력·코드·요청·다른 역할 출력·Judge 설명·도구 결과는 제외하며 현재 tool_result만 현재 실행의 증거로 사용한다. 첫 Agent 호출 전에 내용·ID·순서·해시를 고정하고, 전송 재시도에서 다시 조회하지 않는다. 문맥 초과는 명시적 오류로 처리하며 임의 요약이나 history 삭제는 하지 않는다.
 

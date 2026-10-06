@@ -117,13 +117,15 @@ M4는 **같은 Run·역할·평가 phase·버전의 최근 최대 5개 최초 �
 
 ## Judge 검증 기록
 
-새 검증 결과에는 `schema_version: 2`, `schema_valid`, `evidence_required`, `evidence_valid`, `failure_kind`, `failed_rules`, `attempt`, `error`를 저장한다. 각 평가의 시도 이력도 보존하고 동일 시도 재개 시 중복 집계하지 않는다.
+검증 기록은 이전 `schema_version: 2/3`과 새 평가기 v3의 `schema_version: 4`를 지원하며, `schema_valid`, `evidence_required`, `evidence_valid`, `failure_kind`, `failed_rules`, `attempt`, `error`를 저장한다. 각 평가의 시도 이력도 보존하고 동일 시도 재개 시 중복 집계하지 않는다.
 
 | failure_kind | 의미 |
 |---|---|
 | schema | JSON 파싱 또는 JudgeResult 구조·타입·필수 필드 검증 실패 |
 | evidence_missing | violated 규칙에 필수 인용이 없음 |
 | evidence_mismatch | 인용문이 현재 응답에 정확히 존재하지 않음 |
+| authority_conflict | 서버가 확인한 허용 서명·오류 없음·실행 보고 자체를 의미 위반의 증거로 사용함. Judge 재검증 대상 |
+| unexpected_evidence | 준수·불확실 판정에 불필요한 인용 또는 경로가 있음 |
 | provider | API·전송·불완전 공급자 응답 오류로 검사를 수행하지 못함 |
 | budget | 요청·입출력 예산 제한으로 검사를 수행하지 못함 |
 | unknown | 이전 기록 등으로 실패 유형을 정확히 분류할 수 없음 |
@@ -140,7 +142,8 @@ M4는 **같은 Run·역할·평가 phase·버전의 최근 최대 5개 최초 �
 
 - 실제 실행은 완료된 비-Mock 도구 결과 중 pass/fail/error/timeout을 구분한다. Mock·not_executed는 실제 테스트 실행 성공으로 세지 않는다.
 - Runner 보고 일치는 선택된 응답의 실행 대조 결과를 사용하고 실제 실행 coverage를 함께 표시한다. 미실행을 정확히 보고한 경우를 별도로 센다.
-- 출력 형식 오류는 검증기가 기록한 오류만 센다. 현재 Designer/Reviewer 전체 출력 형식 검증기는 없으므로 이 지표를 모든 역할의 형식 준수율로 해석하지 않는다.
+- 새 평가기 v3는 Designer/Reviewer JSON 계약과 기존 기본 Markdown 계약도 검사한다. 구형 기록에 없는 검사를 소급 적용하지 않으며 형식 준수를 의미적 준수로 해석하지 않는다. CSV v4는 output_contract와 evaluator_generation을 추가하고 원본 응답·Judge·최종 판정 및 충돌을 보존한다.
+- v3의 서버–Judge 충돌 분모는 충돌 검사를 수행한 전체 역할 평가이며, v2는 당시 검사한 Runner 평가를 유지한다. 여러 기준의 충돌이나 여러 시도는 평가당 한 번 센다. 충돌은 인간 라벨에 근거한 오탐률과 다르다.
 - 토큰은 저장된 공급자 사용량만 합산한다. Mock의 0과 미보고를 구분한다. 복구 비용은 Agent/Judge 비용의 부분집합이며 합계에 다시 더하지 않는다.
 - 전송 재시도는 `attempt_number > 1`, Judge 검증 재시도는 평가별 validation attempt로 구분한다.
 - 역할 호출 시간은 시작~종료이며 Online 평가·복구를 포함하고 L1 Offline 시간은 제외한다. 취소·실패 상태별로 확인할 수 있다.
