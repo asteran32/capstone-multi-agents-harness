@@ -9,6 +9,7 @@ from app.contracts import (JudgePromptDocument, ROLES, RunnerReport, canonical, 
                            evaluation_version, parse_policy, render_policy)
 from app.evaluation import check_judge, lexical
 from app.evaluation_v2 import evaluation_profile, judge_payload
+from app.evaluation_v3 import resolve, server_checks, validate
 
 
 def policy():
@@ -24,6 +25,36 @@ def test_agent_demonstrations_do_not_teach_forbidden_literals_or_fabricated_repo
             if role['role'] == 'test_runner':
                 parsed = RunnerReport.model_validate_json(example['output']).model_dump()
                 assert parsed == example['input']['tool_result']
+
+
+def test_reviewer_v3_examples_survive_evidence_validation_and_control_history_eligibility():
+    """Validate authored labels and aggregation, not live model classification accuracy."""
+    document = policy()
+    profile = evaluation_profile(document)
+    config = {'policy': document, 'evaluation_profile': profile}
+    for example in profile['few_shot_examples']['code_reviewer']:
+        text = example['current_response']
+        execution = server_checks(config, 'code_reviewer', text,
+                                  example['reference_material']['task_input'], None)
+        # These examples isolate semantic breaches from format/missing-field problems.
+        assert execution['verdict'] == 'compliant', example['id']
+        judgment, validation = validate(canonical(example['expected']), 'code_reviewer', execution)
+        assert validation['valid'], (example['id'], validation)
+        result = resolve(lexical(text, document['forbidden_terms']), judgment, execution, validation)
+        violations = [c for c in example['expected']['checks'].values() if c['verdict'] == 'violated']
+        assert result['aggregate_verdict'] == ('violated' if violations else 'compliant'), example['id']
+        assert result['history_eligible'] is (not violations), example['id']
+
+
+def test_reviewer_agent_and_judge_share_the_same_positive_examples():
+    document = policy()
+    role = next(r for r in document['roles'] if r['role'] == 'code_reviewer')
+    judge_examples = {e['id']: e for e in evaluation_profile(document)['few_shot_examples']['code_reviewer']}
+    for example in role['few_shot_examples']:
+        paired = judge_examples[example['id']]
+        assert paired['reference_material']['task_input'] == example['input']['task_input']
+        assert paired['current_response'] == example['output']
+        assert all(check['verdict'] == 'compliant' for check in paired['expected']['checks'].values())
 
 
 @pytest.mark.parametrize('role', ROLES)
