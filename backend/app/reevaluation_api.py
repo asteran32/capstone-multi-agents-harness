@@ -144,7 +144,10 @@ def router(authenticate, require, key_required):
             from .reevaluation_metrics import judge_checks, judge_prediction
             for case in cases_for(s, review_set.id):
                 row, label, baseline = results[case.id], run.labels_snapshot.get(case.id, {}), case.data.get('baseline') or {}
-                rows.append({'csv_schema_version': 2, 'mode': run.config_snapshot.get('mode', 'labeled_validation'),
+                origin = row['status'] if row['status'] in ('retained', 'skipped') else 'reevaluated'
+                current = {**row['result'], 'status': row['status']} if origin == 'reevaluated' else None
+                applied = row['result'] if origin == 'retained' else current
+                rows.append({'csv_schema_version': 3, 'mode': run.config_snapshot.get('mode', 'labeled_validation'),
                     'batch_id': review_set.batch_id, 'reevaluation_id': run.id, 'review_set_id': review_set.id,
                     'corpus_sha256': review_set.corpus_sha256, 'evaluation_version': run.config_snapshot['evaluation_version'],
                     'judge_model': run.config_snapshot['judge_model'], 'policy_changed': run.config_snapshot['policy_changed'],
@@ -156,14 +159,21 @@ def router(authenticate, require, key_required):
                     'policy_sha256': run.config_snapshot.get('policy_sha256'),
                     'judge_profile_sha256': run.config_snapshot.get('judge_profile_sha256'),
                     'snapshot_sha256': case.data.get('snapshot_sha256'),
+                    'label_status': label.get('status', 'unreviewed'),
                     'expected': label.get('verdict'), 'reviewer': label.get('reviewer'), 'reason': label.get('reason'),
                     'baseline_version': baseline.get('evaluation_version'), 'baseline_status': baseline.get('status'),
                     'baseline_verdict': baseline.get('aggregate_verdict'), 'new_status': row['status'],
-                    'new_verdict': row['result'].get('aggregate_verdict'),
+                    'new_verdict': (current or {}).get('aggregate_verdict'),
                     'baseline_judge_verdict': judge_prediction(baseline),
-                    'new_judge_verdict': judge_prediction({**row['result'], 'status': row['status']}),
+                    'new_judge_verdict': judge_prediction(current) if current is not None else None,
                     'baseline_judge_checks': judge_checks(baseline),
-                    'new_judge_checks': judge_checks({**row['result'], 'status': row['status']}),
+                    'new_judge_checks': judge_checks(current),
+                    'result_origin': origin,
+                    'applied_status': (applied or {}).get('status'),
+                    'applied_verdict': (applied or {}).get('aggregate_verdict'),
+                    'applied_judge_verdict': judge_prediction(applied),
+                    'applied_evaluation_version': baseline.get('evaluation_version') if origin == 'retained'
+                        else run.config_snapshot['evaluation_version'] if origin == 'reevaluated' else None,
                     'audit': row['result']})
         output = io.StringIO(newline='')
         writer = csv.DictWriter(output, fieldnames=list(rows[0]))

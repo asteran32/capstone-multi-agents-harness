@@ -70,7 +70,7 @@ def evaluate_case(run_id, result_id):
     check_cancel(run_id)
     with transaction() as s:
         run, row = s.get(Reevaluation, run_id), s.get(ReevaluationResult, result_id)
-        if row.status in ('completed', 'error'):
+        if row.status in ('completed', 'error', 'retained', 'skipped'):
             return
         case, config = s.get(ReviewCase, row.case_id), run.config_snapshot
         data, role = case.data, case.role
@@ -125,6 +125,10 @@ def process_reevaluation(id):
         if not is_replay(review_set) and digest(run.labels_snapshot) != review_set.review['labels_sha256']:
             raise ValueError('확정 기대 판정 해시 불일치')
         config = run.config_snapshot
+        if config.get('evaluation_scope') == 'reviewed_only':
+            selected = [c.id for c in cases if run.labels_snapshot.get(c.id, {}).get('status') == 'reviewed']
+            if config.get('selected_case_ids') != selected:
+                raise ValueError('선택 재평가 대상과 확정 기대 판정이 일치하지 않습니다.')
         if is_replay(review_set):
             if config.get('mode') != 'judge_replay' or config.get('corpus_sha256') != review_set.corpus_sha256 or run.labels_snapshot:
                 raise ValueError('Judge 전용 고정 세트 설정 불일치')
@@ -134,6 +138,8 @@ def process_reevaluation(id):
                 config['budget']['max_output_tokens'], config['evaluation_profile']):
             raise ValueError('평가 버전 해시 불일치')
         ids = list(s.scalars(select(ReevaluationResult.id).join(ReviewCase, ReviewCase.id == ReevaluationResult.case_id)
-            .where(ReevaluationResult.reevaluation_id == id).order_by(ReviewCase.position)))
+            .where(ReevaluationResult.reevaluation_id == id,
+                   ReevaluationResult.case_id.in_(config['selected_case_ids'])
+                   if config.get('evaluation_scope') == 'reviewed_only' else True).order_by(ReviewCase.position)))
     for result_id in ids:
         evaluate_case(id, result_id)

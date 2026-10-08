@@ -112,6 +112,15 @@ def prediction(ev):
     return value if value in ('compliant', 'violated', 'uncertain') else 'pending'
 
 
+def applied_evaluation(row):
+    """Retained results use the original status, version, and Judge evidence verbatim."""
+    if row is None or row.status == 'skipped':
+        return None
+    if row.status == 'retained':
+        return row.result
+    return {**row.result, 'status': row.status}
+
+
 def counts(items, side):
     matrix = {truth: {v: 0 for v in ('compliant', 'violated', 'uncertain', 'error', 'pending')}
               for truth in ('compliant', 'violated', 'uncertain')}
@@ -134,15 +143,17 @@ def counts(items, side):
 
 def validation_metrics(run, cases, results):
     by_case = {r.case_id: r for r in results}
-    items, attempts, transitions = [], [], Counter()
+    items, attempts, transitions, applied = [], [], Counter(), Counter()
     for case in cases:
         label = run.labels_snapshot.get(case.id, {})
         row = by_case.get(case.id)
         result = row.result if row else {}
-        old, new = prediction(case.data.get('baseline')), prediction({'status': row.status, **result} if row else None)
-        attempts.extend(result.get('validation_attempts', []))
+        old, new = prediction(case.data.get('baseline')), prediction(applied_evaluation(row))
+        if row is not None and row.status not in ('retained', 'skipped'):
+            attempts.extend(result.get('validation_attempts', []))
         if case.kind == 'stored':
             transitions[(old, new)] += 1
+            applied[new] += 1
         if label.get('status') != 'reviewed':
             continue
         items.append({'id': case.id, 'kind': case.kind, 'role': case.role, 'expected': label['verdict'], 'old': old, 'new': new})
@@ -161,8 +172,8 @@ def validation_metrics(run, cases, results):
     if run.config_snapshot.get('policy_changed'):
         reasons.append('원본 정책과 변경된 정책의 효과를 구분해야 합니다. 동일 정책 비교가 필요합니다.')
     if len(items) != len(cases):
-        reasons.append('미검토 기대 판정이 있습니다.')
-    if any(not r or r.status != 'completed' for r in (by_case.get(c.id) for c in cases)):
+        reasons.append('일부 사례만 검토했습니다. 재평가 결과는 확인할 수 있지만 전체 평가기 품질은 검증되지 않았습니다.')
+    if any(not r or r.status != 'completed' for r in (by_case.get(i['id']) for i in items)):
         reasons.append('미완료 또는 평가 오류 사례가 있습니다.')
     if not old['expected_c'] or not old['expected_v']:
         reasons.append('기존 평가와 비교할 기대 C/V 표본이 모두 필요합니다.')
@@ -176,7 +187,11 @@ def validation_metrics(run, cases, results):
         reasons.append('합성 정상·위반 사례가 모두 기대 판정과 일치해야 합니다.')
     schema = [a for a in attempts if a.get('schema_valid') is not None]
     evidence = [a for a in attempts if a.get('evidence_required')]
-    return {'reviewed': len(items), 'total': len(cases), **groups,
+    return {'reviewed': len(items), 'unreviewed': len(cases) - len(items), 'total': len(cases), **groups,
+            'retained': sum(r.status == 'retained' for r in results),
+            'skipped': sum(r.status == 'skipped' for r in results),
+            'applied': {'total': sum(applied.values()),
+                        'verdicts': {v: applied[v] for v in (*VERDICTS, 'error', 'pending')}},
             'paired': {'total': len(paired), 'excluded': groups['stored']['new']['total'] - len(paired), 'old': old, 'new': new},
             'transitions': [{'old': k[0], 'new': k[1], 'count': v} for k, v in sorted(transitions.items())],
             'judge': {'attempts': len(attempts), 'schema_checks': len(schema),

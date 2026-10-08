@@ -197,9 +197,12 @@ def seal_review(s, review_set, body):
         raise Conflict('검토 내용이 변경되었습니다. 새로고침하세요.')
     cases = cases_for(s, review_set.id)
     check_corpus(review_set, cases)
-    if not body.reviewer.strip() or any(c.label.get('status') != 'reviewed' for c in cases):
-        raise Conflict('모든 기대 판정을 검토하고 정책 확인자를 입력하세요.')
+    reviewed = [c.id for c in cases if c.label.get('status') == 'reviewed']
+    if not body.reviewer.strip() or not reviewed:
+        raise Conflict('선택한 사례의 기대 판정을 하나 이상 저장하고 정책 확인자를 입력하세요.')
     review_set.review = {'reviewer': body.reviewer.strip(), 'policy_confirmed': True,
+                        'reviewed_case_ids': reviewed, 'reviewed_count': len(reviewed),
+                        'unreviewed_count': len(cases) - len(reviewed),
                         'sealed_at': now().isoformat(), 'labels_sha256': digest({c.id: c.label for c in cases})}
     review_set.status = 'ready'
     review_set.revision += 1
@@ -215,13 +218,15 @@ def start_reevaluation(s, review_set, key):
             raise Conflict('같은 요청 키에 다른 재평가 실행이 있습니다.')
         return existing
     if review_set.status != 'ready':
-        raise Conflict('정책과 모든 기대 판정을 검토·확정한 후 실행하세요.')
+        raise Conflict('정책과 선택한 사례의 기대 판정을 검토·확정한 후 실행하세요.')
     cases = cases_for(s, review_set.id)
     check_corpus(review_set, cases)
     labels = {c.id: c.label for c in cases}
     if digest(labels) != review_set.review['labels_sha256']:
         raise Conflict('확정된 기대 판정이 변경되었습니다.')
-    return queue_reevaluation(s, review_set, key, request_hash, review_set.config_snapshot, labels, cases)
+    config = {**review_set.config_snapshot, 'evaluation_scope': 'reviewed_only',
+              'selected_case_ids': [c.id for c in cases if labels[c.id].get('status') == 'reviewed']}
+    return queue_reevaluation(s, review_set, key, request_hash, config, labels, cases)
 
 
 def queue_reevaluation(s, review_set, key, request_hash, config, labels, cases):
@@ -230,7 +235,13 @@ def queue_reevaluation(s, review_set, key, request_hash, config, labels, cases):
     s.add(run)
     s.flush()
     for case in cases:
-        s.add(ReevaluationResult(reevaluation_id=run.id, case_id=case.id))
+        if config.get('evaluation_scope') == 'reviewed_only' and case.id not in config['selected_case_ids']:
+            baseline = case.data.get('baseline')
+            s.add(ReevaluationResult(reevaluation_id=run.id, case_id=case.id,
+                                    status='retained' if baseline is not None else 'skipped',
+                                    result=deepcopy(baseline) if baseline is not None else {}))
+        else:
+            s.add(ReevaluationResult(reevaluation_id=run.id, case_id=case.id))
     batch = s.get(Batch, review_set.batch_id)
     s.add(Job(run_id=batch.manifest[0]['run_id'], job_type='reevaluation', job_key=f'reevaluation:{run.id}',
               payload={'reevaluation_id': run.id}))
@@ -248,7 +259,11 @@ def execution_summary(s, run, detail=False):
     counts = dict(s.execute(select(ReevaluationRequest.status, func.count()).where(ReevaluationRequest.reevaluation_id == run.id)
                             .group_by(ReevaluationRequest.status)).all())
     result = {**record(run), 'status': job.status, 'error': job.error, 'total': len(results),
-              'finished': sum(r.status in ('completed', 'error') for r in results),
+              'finished': sum(r.status in ('completed', 'error', 'retained', 'skipped') for r in results),
+              'evaluation_total': sum(r.status not in ('retained', 'skipped') for r in results),
+              'evaluation_finished': sum(r.status in ('completed', 'error') for r in results),
+              'retained': sum(r.status == 'retained' for r in results),
+              'skipped': sum(r.status == 'skipped' for r in results),
               'errors': sum(r.status == 'error' for r in results), 'requests': sum(counts.values()),
               'request_statuses': counts}
     if detail:
