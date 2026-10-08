@@ -3,17 +3,19 @@ from copy import deepcopy
 from sqlalchemy import select, func
 
 from .config import settings
-from .contracts import digest, parse_policy, evaluation_version
+from .contracts import digest, parse_policy, evaluation_version, JudgeReplaySettings, ROLES
 from .db import (ReviewSet, ReviewCase, Reevaluation, ReevaluationResult, ReevaluationRequest,
                  Batch, Run, Call, Response, Snapshot, ToolExecution, Evaluation, Job, uid, now, record)
 from .evaluation_v2 import evaluation_profile
-from .services import Conflict
+from .services import Conflict, DEFAULT_POLICY
 from .validation_cases import validation_cases
 from .output_contracts import contract_for
 
 
 def create_review_set(s, batch, body, key):
-    request_hash = digest({'batch_id': batch.id, **body.model_dump(mode='json')})
+    # Keep historical idempotency keys valid for the original validation mode.
+    fields = body.model_dump(mode='json', exclude={'mode'} if body.mode == 'labeled_validation' else set())
+    request_hash = digest({'batch_id': batch.id, **fields})
     existing = s.scalar(select(ReviewSet).where(ReviewSet.idempotency_key == key))
     if existing:
         if existing.request_sha256 != request_hash:
@@ -31,13 +33,21 @@ def create_review_set(s, batch, body, key):
         raise ValueError('역할 정책이 동일한 배치가 필요합니다.')
     if body.judge_model not in ('mock', *settings.live_models):
         raise ValueError('서버에 등록되지 않은 Judge 모델입니다.')
+    if body.mode == 'judge_replay' and body.policy_raw is not None:
+        raise ValueError('응답 고정 시 정책을 수정할 수 없습니다. Judge 실행 설정에서 정책을 선택하세요.')
     raw = body.policy_raw if body.policy_raw is not None else original['policy_raw']
     policy = parse_policy(raw).model_dump()
-    profile = evaluation_profile(policy)
-    config = {**body.model_dump(mode='json'), 'policy_raw': raw, 'policy': policy,
-              'evaluation_profile': profile, 'transport_attempts': 2, 'judge_attempts': 2,
-              'policy_changed': digest(policy) != digest(original['policy']),
-              'evaluation_version': evaluation_version(policy, body.judge_model, body.budget.max_output_tokens, profile)}
+    if body.mode == 'judge_replay':
+        # The corpus stores source settings; each replay separately freezes its evaluator.
+        config = {'mode': 'judge_replay', 'policy_raw': raw, 'policy': policy,
+                  'judge_model': original['judge_model'], 'budget': deepcopy(original['budget']),
+                  'source_evaluation_version': original['evaluation_version']}
+    else:
+        profile = evaluation_profile(policy)
+        config = {**fields, 'policy_raw': raw, 'policy': policy,
+                  'evaluation_profile': profile, 'transport_attempts': 2, 'judge_attempts': 2,
+                  'policy_changed': digest(policy) != digest(original['policy']),
+                  'evaluation_version': evaluation_version(policy, body.judge_model, body.budget.max_output_tokens, profile)}
     review_set = ReviewSet(id=uid(), batch_id=batch.id, idempotency_key=key,
                           request_sha256=request_hash, corpus_sha256='', config_snapshot=config)
     s.add(review_set)
@@ -75,7 +85,10 @@ def create_review_set(s, batch, body, key):
                 'tool': {k: getattr(tool, k) for k in ('id', 'status', 'arguments', 'result', 'stdout', 'stderr', 'junit_xml')} if tool else None,
                 'baseline': {k: v for k, v in record(baseline).items() if k != 'created_at'} if baseline else None}
         corpus.append({'case_key': response.id, 'kind': 'stored', 'role': call.role, 'data': data, 'label': {'status': 'unreviewed'}})
-    corpus.extend({**c, 'kind': 'synthetic'} for c in validation_cases(policy))
+    if body.mode == 'labeled_validation':
+        corpus.extend({**c, 'kind': 'synthetic'} for c in validation_cases(policy))
+    else:
+        review_set.status = 'ready'
     for position, item in enumerate(corpus):
         item_hash = digest({'case_key': item['case_key'], 'kind': item['kind'], 'role': item['role'], 'data': item['data']})
         s.add(ReviewCase(review_set_id=review_set.id, position=position, data_sha256=item_hash, **item))
@@ -94,9 +107,64 @@ def check_corpus(review_set, cases):
         raise ValueError('고정 검증 세트 해시가 일치하지 않습니다.')
 
 
+def is_replay(review_set):
+    return review_set.config_snapshot.get('mode') == 'judge_replay'
+
+
+def replay_preview(s, review_set, body):
+    if not is_replay(review_set):
+        raise Conflict('Judge 전용 응답 세트가 필요합니다.')
+    cases = cases_for(s, review_set.id)
+    check_corpus(review_set, cases)
+    if body.judge_model not in ('mock', *settings.live_models):
+        raise ValueError('서버에 등록되지 않은 Judge 모델입니다.')
+    if body.budget.max_requests < len(cases):
+        raise ValueError('전체 요청 한도는 고정 응답 수 이상이어야 합니다.')
+    source = review_set.config_snapshot
+    try:
+        raw = DEFAULT_POLICY.read_text() if body.policy_source == 'current' else source['policy_raw']
+    except OSError as exc:
+        raise ValueError('현재 역할 정책 파일을 읽을 수 없습니다.') from exc
+    policy = parse_policy(raw).model_dump()
+    profile = evaluation_profile(policy)
+    config = {**JudgeReplaySettings.model_validate(body.model_dump(include=set(JudgeReplaySettings.model_fields))).model_dump(mode='json'),
+              'mode': 'judge_replay', 'policy_raw': raw, 'policy': policy,
+              'evaluation_profile': profile, 'transport_attempts': 2, 'judge_attempts': 2,
+              'corpus_sha256': review_set.corpus_sha256, 'source_policy_version': source['policy']['version'],
+              'policy_changed': digest(policy) != digest(source['policy']),
+              'policy_sha256': digest(policy), 'judge_profile_sha256': digest(profile),
+              'evaluation_version': evaluation_version(policy, body.judge_model, body.budget.max_output_tokens, profile)}
+    return {'config_snapshot': config, 'config_sha256': digest(config), 'total': len(cases),
+            'roles': {role: sum(c.role == role for c in cases) for role in ROLES},
+            'base_requests': len(cases), 'max_requests': min(len(cases) * 4, body.budget.max_requests)}
+
+
+def start_replay(s, review_set, body, key):
+    if not is_replay(review_set):
+        raise Conflict('Judge 전용 응답 세트가 필요합니다.')
+    request_hash = digest({'review_set_id': review_set.id, **body.model_dump(mode='json')})
+    existing = s.scalar(select(Reevaluation).where(Reevaluation.idempotency_key == key))
+    if existing:
+        if existing.request_sha256 != request_hash:
+            raise Conflict('같은 요청 키에 다른 재평가 실행이 있습니다.')
+        return existing
+    for id in s.scalars(select(Reevaluation.id).where(Reevaluation.review_set_id == review_set.id)):
+        job = execution_job(s, id)
+        if job and job.status in ('queued', 'running'):
+            raise Conflict('이 응답 세트의 Judge 실행이 진행 중입니다.')
+    preview = replay_preview(s, review_set, body)
+    if preview['config_sha256'] != body.expected_config_sha256:
+        raise Conflict('정책 또는 Judge 설정이 변경되었습니다. 실행 설정을 다시 확인하세요.')
+    config = {**preview['config_snapshot'], 'config_sha256': preview['config_sha256']}
+    return queue_reevaluation(s, review_set, key, request_hash, config, {}, cases_for(s, review_set.id))
+
+
 def review_summary(s, review_set, detail=False):
     cases = cases_for(s, review_set.id)
-    result = {**record(review_set), 'total': len(cases),
+    result = {**record(review_set), 'mode': review_set.config_snapshot.get('mode', 'labeled_validation'), 'total': len(cases),
+              'roles': {role: sum(c.role == role for c in cases) for role in ROLES},
+              'versions': {str(v): sum(c.data['response_version'] == v for c in cases)
+                           for v in sorted({c.data['response_version'] for c in cases})},
               'stored': sum(c.kind == 'stored' for c in cases),
               'synthetic': sum(c.kind == 'synthetic' for c in cases),
               'reviewed': sum(c.label.get('status') == 'reviewed' for c in cases)}
@@ -121,6 +189,8 @@ def update_label(s, review_set, case, body):
 
 
 def seal_review(s, review_set, body):
+    if is_replay(review_set):
+        raise Conflict('Judge 전용 세트에는 사람 기대 판정을 확정하지 않습니다.')
     if review_set.status == 'ready':
         return
     if review_set.revision != body.revision:
@@ -136,6 +206,8 @@ def seal_review(s, review_set, body):
 
 
 def start_reevaluation(s, review_set, key):
+    if is_replay(review_set):
+        raise Conflict('Judge 실행 설정을 확인한 뒤 전용 실행 경로를 사용하세요.')
     request_hash = digest({'review_set_id': review_set.id})
     existing = s.scalar(select(Reevaluation).where(Reevaluation.idempotency_key == key))
     if existing:
@@ -149,8 +221,12 @@ def start_reevaluation(s, review_set, key):
     labels = {c.id: c.label for c in cases}
     if digest(labels) != review_set.review['labels_sha256']:
         raise Conflict('확정된 기대 판정이 변경되었습니다.')
+    return queue_reevaluation(s, review_set, key, request_hash, review_set.config_snapshot, labels, cases)
+
+
+def queue_reevaluation(s, review_set, key, request_hash, config, labels, cases):
     run = Reevaluation(id=uid(), review_set_id=review_set.id, idempotency_key=key, request_sha256=request_hash,
-                      config_snapshot=deepcopy(review_set.config_snapshot), labels_snapshot=labels)
+                      config_snapshot=deepcopy(config), labels_snapshot=labels)
     s.add(run)
     s.flush()
     for case in cases:
@@ -176,11 +252,12 @@ def execution_summary(s, run, detail=False):
               'errors': sum(r.status == 'error' for r in results), 'requests': sum(counts.values()),
               'request_statuses': counts}
     if detail:
-        from .reevaluation_metrics import validation_metrics
+        from .reevaluation_metrics import validation_metrics, replay_metrics, request_usage
         review_set = s.get(ReviewSet, run.review_set_id)
         cases = cases_for(s, review_set.id)
         result['results'] = [record(r) for r in results]
-        result['metrics'] = validation_metrics(run, cases, results)
+        result['metrics'] = replay_metrics(run, cases, results) if is_replay(review_set) else validation_metrics(run, cases, results)
+        result['usage'] = request_usage(list(s.scalars(select(ReevaluationRequest).where(ReevaluationRequest.reevaluation_id == run.id))))
     return result
 
 
@@ -194,6 +271,12 @@ def control_execution(s, run, action):
     elif action == 'resume':
         if job.status not in ('failed', 'cancelled'):
             raise Conflict('실패하거나 취소된 작업만 재개할 수 있습니다.')
+        if run.config_snapshot.get('mode') == 'judge_replay':
+            for other_id in s.scalars(select(Reevaluation.id).where(
+                    Reevaluation.review_set_id == run.review_set_id, Reevaluation.id != run.id)):
+                other_job = execution_job(s, other_id)
+                if other_job and other_job.status in ('queued', 'running'):
+                    raise Conflict('이 응답 세트의 다른 Judge 실행이 진행 중입니다.')
         run.cancel_requested = False
         job.status, job.error, job.lease_owner, job.lease_expires_at = 'queued', None, None, None
     s.flush()

@@ -8,7 +8,7 @@ from .evaluation import lexical, uncertain
 from .evaluation_v2 import judge_payload
 from .providers import respond, ProviderError
 from .runtime import Cancelled, BudgetExceeded
-from .reevaluation import cases_for, check_corpus
+from .reevaluation import cases_for, check_corpus, is_replay
 
 
 def check_cancel(id):
@@ -122,9 +122,14 @@ def process_reevaluation(id):
         review_set = s.get(ReviewSet, run.review_set_id)
         cases = cases_for(s, review_set.id)
         check_corpus(review_set, cases)
-        if digest(run.labels_snapshot) != review_set.review['labels_sha256']:
+        if not is_replay(review_set) and digest(run.labels_snapshot) != review_set.review['labels_sha256']:
             raise ValueError('확정 기대 판정 해시 불일치')
         config = run.config_snapshot
+        if is_replay(review_set):
+            if config.get('mode') != 'judge_replay' or config.get('corpus_sha256') != review_set.corpus_sha256 or run.labels_snapshot:
+                raise ValueError('Judge 전용 고정 세트 설정 불일치')
+            if config.get('config_sha256') != digest({k: v for k, v in config.items() if k != 'config_sha256'}):
+                raise ValueError('Judge 실행 설정 해시 불일치')
         if config['evaluation_version'] != evaluation_version(config['policy'], config['judge_model'],
                 config['budget']['max_output_tokens'], config['evaluation_profile']):
             raise ValueError('평가 버전 해시 불일치')

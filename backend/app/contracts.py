@@ -147,9 +147,20 @@ class BatchAnalysisUpdate(Strict):
 
 
 class ReviewSetCreate(Strict):
+    mode: Literal['labeled_validation', 'judge_replay'] = 'labeled_validation'
     judge_model: str = 'mock'
     policy_raw: str | None = None
     budget: Budget = Field(default_factory=lambda: Budget(max_requests=1000))
+
+
+class JudgeReplaySettings(Strict):
+    judge_model: str
+    policy_source: Literal['original', 'current'] = 'original'
+    budget: Budget = Field(default_factory=lambda: Budget(max_requests=1000))
+
+
+class JudgeReplayExecute(JudgeReplaySettings):
+    expected_config_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
 
 
 class ReviewLabel(Strict):

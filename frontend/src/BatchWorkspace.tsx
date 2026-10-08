@@ -3,6 +3,7 @@ import {api, downloadCsv, post} from './api';
 import {Batch, Dict, ExperimentMode, names, roles} from './types';
 import {BatchAnalytics} from './BatchAnalytics';
 import {ReevaluationPanel} from './ReevaluationPanel';
+import {JudgeReplayPanel} from './JudgeReplayPanel';
 import {defaultPrompts} from './defaultPrompts';
 import './batches.css';
 
@@ -95,6 +96,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
      {!finished.includes(batch.status)&&<button disabled={busy||batch.status==='cancel_requested'} onClick={async()=>{setBusy(true);try{await post(`/batches/${batch.id}/cancel`);setReload(x=>x+1)}catch(e){onError(String(e))}finally{setBusy(false)}}}>남은 실행 취소</button>}
     </section>
     <BatchAnalytics key={batch.id} batchId={batch.id} onInspect={onRun}/>
+    <JudgeReplayPanel key={'judge-replay:'+batch.id} batch={batch} config={config} onInspect={onRun} onError={onError}/>
     <ReevaluationPanel key={'reevaluation:'+batch.id} batch={batch} config={config} onBatch={onBatch} onInspect={onRun} onError={onError}/>
     <section className="batch-rerun" aria-label="모드를 바꿔 다시 실행">
      <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·정답 후보·모델·정책·요청·Round를 유지하고 빈 이력에서 다시 시작합니다. 새 실행에는 최신 준수 출력 1개 규칙이 적용됩니다.</p></div>

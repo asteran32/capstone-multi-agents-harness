@@ -9,10 +9,11 @@ from fastapi.responses import Response as HTTPResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from .contracts import ReviewSetCreate, ReviewLabel, ReviewSeal, ComparisonCreate, BatchCreate, digest
+from .contracts import (ReviewSetCreate, ReviewLabel, ReviewSeal, ComparisonCreate, BatchCreate, digest,
+                        JudgeReplaySettings, JudgeReplayExecute)
 from .db import transaction, ReviewSet, ReviewCase, Reevaluation, ReevaluationResult, ReevaluationRequest, Batch, record
 from .reevaluation import (create_review_set, review_summary, update_label, seal_review, start_reevaluation,
-                           execution_summary, control_execution, cases_for)
+                           execution_summary, control_execution, cases_for, replay_preview, start_replay)
 from .services import Conflict
 from .batches import create_batch
 from .exports import csv_cell
@@ -85,6 +86,21 @@ def router(authenticate, require, key_required):
                 return execution_summary(s, start_reevaluation(s, lock(s, ReviewSet, id), key))
         return mutation(operation)
 
+    @routes.post('/review-sets/{id}/replay-preview')
+    def preview(id: UUID, body: JudgeReplaySettings):
+        def operation():
+            with transaction() as s:
+                return replay_preview(s, require(s, ReviewSet, id), body)
+        return mutation(operation)
+
+    @routes.post('/review-sets/{id}/replay', status_code=202)
+    def replay(id: UUID, body: JudgeReplayExecute, idempotency_key: str | None = Header(default=None)):
+        key = key_required(idempotency_key)
+        def operation():
+            with transaction() as s:
+                return execution_summary(s, start_replay(s, lock(s, ReviewSet, id), body, key))
+        return mutation(operation)
+
     @routes.get('/reevaluations/{id}')
     def execution(id: UUID):
         with transaction() as s:
@@ -99,7 +115,7 @@ def router(authenticate, require, key_required):
                 raise HTTPException(404, '재평가 사례가 아닙니다.')
             result = s.scalar(select(ReevaluationResult).where(ReevaluationResult.reevaluation_id == run.id,
                                                              ReevaluationResult.case_id == case.id))
-            return {'case': record(case), 'result': record(result), 'label': run.labels_snapshot[case.id],
+            return {'case': record(case), 'result': record(result), 'label': run.labels_snapshot.get(case.id),
                     'requests': [record(r) for r in s.scalars(select(ReevaluationRequest)
                         .where(ReevaluationRequest.result_id == result.id)
                         .order_by(ReevaluationRequest.validation_attempt, ReevaluationRequest.transport_attempt))]}
@@ -108,7 +124,10 @@ def router(authenticate, require, key_required):
     def control(id: UUID, action: Literal['cancel', 'resume']):
         def operation():
             with transaction() as s:
-                return control_execution(s, lock(s, Reevaluation, id), action)
+                run = lock(s, Reevaluation, id)
+                if run.config_snapshot.get('mode') == 'judge_replay':
+                    lock(s, ReviewSet, run.review_set_id)
+                return control_execution(s, run, action)
         return mutation(operation)
 
     @routes.get('/reevaluations/{id}/results.csv')
@@ -122,18 +141,30 @@ def router(authenticate, require, key_required):
             review_set = s.get(ReviewSet, run.review_set_id)
             results = {r['case_id']: r for r in detail['results']}
             rows = []
+            from .reevaluation_metrics import judge_checks, judge_prediction
             for case in cases_for(s, review_set.id):
-                row, label, baseline = results[case.id], run.labels_snapshot[case.id], case.data.get('baseline') or {}
-                rows.append({'csv_schema_version': 1, 'reevaluation_id': run.id, 'review_set_id': review_set.id,
+                row, label, baseline = results[case.id], run.labels_snapshot.get(case.id, {}), case.data.get('baseline') or {}
+                rows.append({'csv_schema_version': 2, 'mode': run.config_snapshot.get('mode', 'labeled_validation'),
+                    'batch_id': review_set.batch_id, 'reevaluation_id': run.id, 'review_set_id': review_set.id,
                     'corpus_sha256': review_set.corpus_sha256, 'evaluation_version': run.config_snapshot['evaluation_version'],
                     'judge_model': run.config_snapshot['judge_model'], 'policy_changed': run.config_snapshot['policy_changed'],
                     'case_id': case.id, 'kind': case.kind, 'role': case.role, 'source_task_id': case.data['source_task_id'],
                     'response_id': case.data.get('response_id'), 'response_version': case.data['response_version'],
                     'response_sha256': case.data['response_sha256'], 'response': case.data['raw_text'],
-                    'expected': label['verdict'], 'reviewer': label['reviewer'], 'reason': label['reason'],
+                    'policy_source': run.config_snapshot.get('policy_source'),
+                    'policy_version': run.config_snapshot['policy']['version'],
+                    'policy_sha256': run.config_snapshot.get('policy_sha256'),
+                    'judge_profile_sha256': run.config_snapshot.get('judge_profile_sha256'),
+                    'snapshot_sha256': case.data.get('snapshot_sha256'),
+                    'expected': label.get('verdict'), 'reviewer': label.get('reviewer'), 'reason': label.get('reason'),
                     'baseline_version': baseline.get('evaluation_version'), 'baseline_status': baseline.get('status'),
                     'baseline_verdict': baseline.get('aggregate_verdict'), 'new_status': row['status'],
-                    'new_verdict': row['result'].get('aggregate_verdict'), 'audit': row['result']})
+                    'new_verdict': row['result'].get('aggregate_verdict'),
+                    'baseline_judge_verdict': judge_prediction(baseline),
+                    'new_judge_verdict': judge_prediction({**row['result'], 'status': row['status']}),
+                    'baseline_judge_checks': judge_checks(baseline),
+                    'new_judge_checks': judge_checks({**row['result'], 'status': row['status']}),
+                    'audit': row['result']})
         output = io.StringIO(newline='')
         writer = csv.DictWriter(output, fieldnames=list(rows[0]))
         writer.writeheader()
@@ -149,6 +180,8 @@ def router(authenticate, require, key_required):
         def operation():
             with transaction() as s:
                 run = lock(s, Reevaluation, id)
+                if run.config_snapshot.get('mode') == 'judge_replay':
+                    raise Conflict('Judge 전용 재평가는 사람 기대 판정 검증을 대체하지 않습니다.')
                 request_hash = digest(body.model_dump(mode='json'))
                 previous = next((x for x in run.comparison_batches if x['key'] == key), None)
                 if previous:

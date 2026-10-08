@@ -29,7 +29,7 @@ export function ReevaluationPanel({batch,config,onBatch,onInspect,onError}:{batc
  const locked=useRef(false),keys=useRef<Record<string,string>>({});
  useEffect(()=>{
   if(!open)return;let active=true;
-  api<Dict[]>(`/batches/${batch.id}/review-sets`).then(rows=>{if(active)setSets(rows)}).catch(e=>{if(active)onError(String(e))});
+  api<Dict[]>(`/batches/${batch.id}/review-sets`).then(rows=>{if(active)setSets(rows.filter(row=>row.mode!=='judge_replay'))}).catch(e=>{if(active)onError(String(e))});
   return()=>{active=false};
  },[open,batch.id,reload]);
  useEffect(()=>{

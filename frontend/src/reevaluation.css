@@ -13,4 +13,6 @@
 .reeval-scores{margin:20px 0;overflow-x:auto}.reeval-scores table{width:100%;min-width:420px}.reeval-scores td{font-variant-numeric:tabular-nums;white-space:nowrap}
 .reeval-results progress{width:100%;margin:8px 0}.reeval-actions{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
 .reeval-comparison{margin-top:24px;border-top:1px solid var(--line);padding-top:8px}.reeval-comparison ul{padding-left:20px}
+.judge-replay-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.judge-replay-pair>div{min-width:0}.judge-replay small,.judge-replay p{overflow-wrap:anywhere}.judge-replay td{font-variant-numeric:tabular-nums}.judge-replay .reeval-fields{margin:16px 0}
+@media(max-width:760px){.judge-replay-pair{grid-template-columns:1fr}.judge-replay .table-scroll{overflow-x:auto}}
 @media(max-width:600px){.reeval-case{padding:10px}.reeval-start,.reeval-note,.reeval-seal{padding:12px}.reevaluation{font-size:11px}.reeval-scores table{min-width:0;table-layout:fixed}.reeval-scores th,.reeval-scores td{padding:12px 8px;font-size:10px}.reeval-scores th:first-child{width:42%}}
