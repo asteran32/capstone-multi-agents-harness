@@ -22,7 +22,8 @@ def server_checks(config, role, text, task, tool, contract=None):
 def validate_judgment(config, raw, text, role, execution):
     if is_v3(config):
         from .evaluation_v3 import validate
-        return validate(raw, role, execution)
+        return validate(raw, role, execution, collect_schema_errors=(
+            config['evaluation_profile'].get('validation_protocol') == 'all-schema-errors-1'))
     return check_judge(raw, text, role, bool(config.get('evaluation_profile')))
 
 

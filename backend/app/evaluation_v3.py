@@ -51,6 +51,7 @@ def profile(policy, prompts):
             if not checked['valid']:
                 raise ValueError(f"Judge v3 예시가 출력·인용 계약에 맞지 않습니다: {role}/{example['id']}")
     return {'version': 3, 'logic': 'guardrail-3.2', 'input_protocol': 'field-evidence-1',
+            'validation_protocol': 'all-schema-errors-1',
             'retry_protocol': 'validation-feedback-2', **deepcopy(instructions),
             'criteria': deepcopy(CRITERIA), 'output_contracts': contracts,
             'output_schemas': {k: v.model_json_schema() for k, v in MODELS.items()},
@@ -125,26 +126,90 @@ def summarize(checks):
     return result
 
 
-def validate(raw, role, execution):
+def _schema_errors(data, specs):
+    """Collect independent errors without traversing malformed parent values."""
+    errors = []
+
+    def add(key, path, code, message):
+        field = '/' + '/'.join(part.replace('~', '~0').replace('/', '~1') for part in path) if path else '$'
+        errors.append({'rule': specs.get(key, {}).get('rule'), 'criterion_id': key,
+                       'field': field, 'failure_kind': 'schema', 'code': code, 'message': message})
+
+    def object_fields(value, expected, path, key=None):
+        if not isinstance(value, dict):
+            add(key, path, 'invalid_type', '객체여야 합니다.')
+            return False
+        for name in expected:
+            if name not in value:
+                add(key, (*path, name), 'missing_field', '필수 필드가 없습니다.')
+        for name in sorted(set(value) - set(expected)):
+            add(key, (*path, name), 'unexpected_field', '허용되지 않은 필드입니다.')
+        return True
+
+    if not object_fields(data, ('checks',), ()) or 'checks' not in data:
+        return errors
+    checks = data['checks']
+    if not isinstance(checks, dict):
+        add(None, ('checks',), 'invalid_type', '객체여야 합니다.')
+        return errors
+    for key in sorted(set(checks) - set(specs)):
+        add(key, ('checks', key), 'unexpected_criterion', '허용되지 않은 판정 기준입니다.')
+    fields = ('verdict', 'reason', 'evidence', 'evidence_path', 'violation_type')
+    for key, spec in specs.items():
+        path = ('checks', key)
+        if key not in checks:
+            add(key, path, 'missing_criterion', '필수 판정 기준이 없습니다.')
+            continue
+        value = checks[key]
+        if not object_fields(value, fields, path, key):
+            continue
+        for name in fields:
+            if name in value and not isinstance(value[name], str):
+                add(key, (*path, name), 'invalid_type', '문자열이어야 합니다.')
+        reason = value.get('reason')
+        if isinstance(reason, str) and not reason.strip():
+            add(key, (*path, 'reason'), 'blank_reason', '판정 이유는 공백이 아닌 내용을 포함해야 합니다.')
+        verdict = value.get('verdict')
+        if isinstance(verdict, str):
+            if verdict not in ('compliant', 'violated', 'uncertain'):
+                add(key, (*path, 'verdict'), 'invalid_verdict', 'compliant, violated, uncertain 중 하나여야 합니다.')
+            elif isinstance(value.get('violation_type'), str):
+                allowed = spec['types'] if verdict == 'violated' else ['none'] if verdict == 'compliant' else ['unclear']
+                if value['violation_type'] not in allowed:
+                    add(key, (*path, 'violation_type'), 'invalid_violation_type',
+                        '판정에 허용된 위반 유형이어야 합니다: ' + ', '.join(allowed))
+    return errors
+
+
+def validate(raw, role, execution, *, collect_schema_errors=True):
     specs = criteria_for(role)
     validation = {'schema_version': 4, 'valid': False, 'schema_valid': False, 'evidence_valid': None,
                   'evidence_required': None, 'failure_kind': None, 'failed_rules': [], 'error': None,
                   'authority_conflicts': []}
     try:
         data = unique_json(raw)
-        if not isinstance(data, dict) or set(data) != {'checks'} or not isinstance(data['checks'], dict) or set(data['checks']) != set(specs):
-            raise ValueError('Required semantic criteria must appear exactly once; server criteria are not Judge criteria')
-        for key, value in data['checks'].items():
-            if not isinstance(value, dict) or set(value) != {'verdict', 'reason', 'evidence', 'evidence_path', 'violation_type'}:
-                raise ValueError(f'{key}: incorrect fields')
-            if any(not isinstance(v, str) for v in value.values()) or not value['reason'].strip():
-                raise ValueError(f'{key}: fields must be strings and reason must be nonempty')
-            expected_types = specs[key]['types'] if value['verdict'] == 'violated' else ['none'] if value['verdict'] == 'compliant' else ['unclear']
-            if value['verdict'] not in ('compliant', 'violated', 'uncertain') or value['violation_type'] not in expected_types:
-                raise ValueError(f'{key}: invalid verdict / violation_type')
+        if collect_schema_errors:
+            failures = _schema_errors(data, specs)
+            if failures:
+                return None, {**validation, 'failure_kind': 'schema', 'failed_rules': failures,
+                              'error': '; '.join(f"{f['field']}: {f['message']}" for f in failures)}
+        else:
+            # Preserve the original failure details for frozen validation profiles.
+            if not isinstance(data, dict) or set(data) != {'checks'} or not isinstance(data['checks'], dict) or set(data['checks']) != set(specs):
+                raise ValueError('Required semantic criteria must appear exactly once; server criteria are not Judge criteria')
+            for key, value in data['checks'].items():
+                if not isinstance(value, dict) or set(value) != {'verdict', 'reason', 'evidence', 'evidence_path', 'violation_type'}:
+                    raise ValueError(f'{key}: incorrect fields')
+                if any(not isinstance(v, str) for v in value.values()) or not value['reason'].strip():
+                    raise ValueError(f'{key}: fields must be strings and reason must be nonempty')
+                expected_types = specs[key]['types'] if value['verdict'] == 'violated' else ['none'] if value['verdict'] == 'compliant' else ['unclear']
+                if value['verdict'] not in ('compliant', 'violated', 'uncertain') or value['violation_type'] not in expected_types:
+                    raise ValueError(f'{key}: invalid verdict / violation_type')
         validation['schema_valid'] = True
     except (ValueError, TypeError) as exc:
-        return None, {**validation, 'failure_kind': 'schema', 'error': str(exc)}
+        failures = [{'rule': None, 'criterion_id': None, 'field': '$', 'failure_kind': 'schema',
+                     'code': 'invalid_json', 'message': str(exc)}] if collect_schema_errors else []
+        return None, {**validation, 'failure_kind': 'schema', 'failed_rules': failures, 'error': str(exc)}
     fields = execution['output']['fields']
     failures, checked = [], {}
     required = any(v['verdict'] == 'violated' for v in data['checks'].values())
