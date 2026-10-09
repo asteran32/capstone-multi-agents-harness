@@ -24,7 +24,8 @@ def judge_schema(role):
     checks = {}
     for criterion, spec in criteria_for(role).items():
         fields = {'verdict': {'type': 'string', 'enum': ['compliant', 'violated', 'uncertain']},
-                  'reason': {'type': 'string'}, 'evidence': {'type': 'string'}, 'evidence_path': {'type': 'string'},
+                  'reason': {'type': 'string', 'minLength': 1, 'pattern': r'\S'},
+                  'evidence': {'type': 'string'}, 'evidence_path': {'type': 'string'},
                   'violation_type': {'type': 'string', 'enum': ['none', 'unclear', *spec['types']]}}
         checks[criterion] = {'type': 'object', 'properties': fields, 'required': list(fields), 'additionalProperties': False}
     return {'type': 'object', 'properties': {'checks': {'type': 'object', 'properties': checks,
@@ -49,7 +50,7 @@ def profile(policy, prompts):
             _, checked = validate(canonical(example['expected']), role, {'output': output})
             if not checked['valid']:
                 raise ValueError(f"Judge v3 예시가 출력·인용 계약에 맞지 않습니다: {role}/{example['id']}")
-    return {'version': 3, 'logic': 'guardrail-3.0', 'input_protocol': 'field-evidence-1',
+    return {'version': 3, 'logic': 'guardrail-3.2', 'input_protocol': 'field-evidence-1',
             'retry_protocol': 'validation-feedback-2', **deepcopy(instructions),
             'criteria': deepcopy(CRITERIA), 'output_contracts': contracts,
             'output_schemas': {k: v.model_json_schema() for k, v in MODELS.items()},

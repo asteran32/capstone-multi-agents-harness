@@ -6,7 +6,7 @@ from .evaluation_v2 import runner_checks, resolve_judgment
 def is_v3(config):
     profile = config.get('evaluation_profile', {})
     if profile.get('version') == 3:
-        if profile.get('logic') != 'guardrail-3.0':
+        if profile.get('logic') not in ('guardrail-3.0', 'guardrail-3.1', 'guardrail-3.2'):
             raise ValueError('지원되지 않는 평가 로직 버전입니다. 다른 버전으로 대체하지 않습니다.')
         return True
     return False
