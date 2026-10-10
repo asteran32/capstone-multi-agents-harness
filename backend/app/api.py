@@ -108,7 +108,8 @@ def validate_policy(body: PolicyInput):
 @app.get('/api/tasks', dependencies=[Depends(authenticate)])
 def tasks():
     with transaction() as s:
-        ordered = sorted(s.scalars(select(Task)), key=lambda t: int(t.source_task_id.rsplit('/', 1)[1]))
+        ordered = sorted(s.scalars(select(Task).where(Task.source_task_id.like('HumanEval/%'))),
+                         key=lambda t: int(t.source_task_id.rsplit('/', 1)[1]))
         return [{'id': t.id, 'source_task_id': t.source_task_id, 'prompt': t.source_record['prompt'],
                  'entry_point': t.source_record['entry_point']} for t in ordered]
 
@@ -360,6 +361,8 @@ def evaluate(id: UUID, idempotency_key: str | None = Header(default=None)):
 
 from .reevaluation_api import router as reevaluation_router
 app.include_router(reevaluation_router(authenticate, require, key_required))
+from .live import router as live_router
+app.include_router(live_router(authenticate, key_required))
 
 
 if settings.frontend.exists():

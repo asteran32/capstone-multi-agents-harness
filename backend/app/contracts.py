@@ -143,6 +143,24 @@ class BatchRerun(Strict):
     mode: Literal['L1', 'L1+L2', 'FULL']
 
 
+class LiveCreate(Strict):
+    mode: Literal['L1+L2', 'FULL'] = 'FULL'
+    agent_model: str = 'mock'
+    judge_model: str = 'mock'
+    previous_session_id: UUID | None = None
+
+
+class LiveSubmit(Strict):
+    code: str = Field(min_length=1, max_length=20000)
+
+    @field_validator('code')
+    @classmethod
+    def nonempty_code(cls, value):
+        if not value.strip():
+            raise ValueError('제출할 Python 코드를 입력하세요.')
+        return value
+
+
 class BatchAnalysisUpdate(Strict):
     m4_threshold: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     revision: int = Field(ge=0)

@@ -22,7 +22,7 @@ Docker Desktop 또는 Docker Engine과 Compose가 필요합니다. Docker를 켠
 
 `start.sh`는 테스트 실행 이미지와 프런트엔드·백엔드를 빌드하고 PostgreSQL, migration·seed, API, worker, sandbox executor를 시작합니다. 프런트엔드는 API에서 함께 제공하므로 별도 프런트엔드 실행 명령이 필요하지 않습니다. 기존 `python3 scripts/configure.py`(최초 1회)와 `make up` 방식도 사용할 수 있습니다.
 
-로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → 실험 → 일괄 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
+로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → Live → 실험 → 일괄 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
 
 **실험 열기** 또는 상단 **실험** 메뉴에서 문제·후보·모드를 고른 뒤 **새 실행 시작**을 누르세요. 기본 모델은 `mock`, 기본 모드는 `L1+L2`입니다.
 
@@ -51,6 +51,7 @@ make down
 | 저장 응답 재평가 | 종료된 배치의 초기·복구 응답 고정, 사람의 기대 판정 검토, 합성 위반 사례, 새 평가 버전·별도 예산·결과 CSV, 검증 후 모드/Round/복구 전략 비교 |
 | 기록 | 실제 API payload, 모든 Judge 시도, 인용 검증, 도구 결과, 노드 로그 및 상세 조회 |
 | 웹 | Overview 개요·목적·아키텍처 그래프, 설정 패널, 세로 3개 역할 출력과 우측 평가, 최초·복구 전환, run 및 call 필터 |
+| Live | Easy 문제 생성, Python 코드 편집·제출, Reviewer·Runner 결과 2행, 제출 이력 및 역할별 M1~M4·준수 응답 제공률·Judge 검증 지표 |
 | 정책 | YAML/JSON 가져오기·편집·검증·파일 저장, 실행별 원문·설정·버전·해시 고정 |
 | 안정성 | 생성 멱등성, DB 작업 큐·lease·heartbeat, 단일 worker 잠금, 고유키 및 저장 결과 재사용 |
 
@@ -61,6 +62,21 @@ OpenAI 원본 HumanEval **164문제 중 100문제(`HumanEval/0`~`HumanEval/99`)*
 부분집합을 재현하려면 provenance의 `source_url`에서 원본 압축 파일을 내려받은 뒤 `python3 scripts/import_humaneval.py /path/to/HumanEval.jsonl.gz --count 100`을 실행합니다. 가져오기는 원본 SHA-256을 검증하며 기존 문제의 수정·삭제를 거부합니다. `scripts/verify_dataset.py`는 `/data`를 읽기 전용으로 연결한 네트워크 차단 sandbox 컨테이너 안에서만 실행하며, 200개 후보가 각각 원본 테스트에 통과·실패하는지 검증합니다. 실행기는 원본 HumanEval과 같이 후보 코드와 테스트가 전역 문맥을 공유하도록 구성하여 보조 함수를 사용하는 문제도 지원합니다.
 
 ## Mock과 실제 실행
+
+### Live demo
+
+상단 **Live**에 처음 들어가면 Problem designer가 LeetCode Easy 수준의 문제 설명을 작성하고 역할 평가를 받습니다. 왼쪽은 생성된 문제, 중앙은 Python 3.12 코드 편집기, 오른쪽은 Code reviewer와 Test runner 결과입니다. 기본값은 **FULL / Mock Agent / Mock Judge**이며, 상단에서 모델·모드를 바꾸고 **새 문제**를 누르면 다음 문제에 적용됩니다. **L1+L2**도 지원합니다.
+
+1. 문제 생성·역할 평가가 끝나면 함수 서명을 유지해 코드를 작성하고 **Submit** 또는 **⌘/Ctrl+Enter**를 누릅니다.
+2. Reviewer는 제출 코드를 정적으로 검토하며 오류의 위치·원인·영향을 설명합니다. Runner는 동일한 제출 코드와 고정 테스트를 기존 격리 환경에서 실행합니다. 두 역할 모두 코드·테스트를 수정하거나 풀이를 제공하지 않습니다.
+3. 오른쪽 **Results**에서 제출별 결과를 선택할 수 있습니다. **이 제출 코드 불러오기**는 해당 제출 당시의 코드를 편집기로 가져옵니다. 작성 중인 코드는 현재 브라우저 탭에 저장되며 `?live=세션ID` 주소에서 문제와 서버에 저장된 제출 기록을 다시 열 수 있습니다.
+4. 하단은 현재 문제의 생성 1회와 모든 제출에 대한 역할별 지표입니다. M1·M2·M3는 최초 응답 기준 통과/준수 판정률, 준수 응답 제공률은 최종 준수 응답/전체 호출입니다. M4·Decision coverage는 **같은 문제·역할의 최근 최초 응답 최대 5건**으로 계산하며 5건 미만은 Warmup입니다. Judge 유효 판정률은 스키마·인용 검증 통과율이고, Judge의 실제 정확도는 아닙니다. 코드의 테스트 통과 여부는 별도로 Runner의 도구 결과에 표시합니다.
+
+Live는 저장소에 준비된 **원본 Easy 명세 5종**(누적 합·고유 문자·두 수의 합·괄호·정렬 목록 병합)에서 문제를 선택합니다. LeetCode 문제를 수집·복사하지 않으며, Designer는 기존 역할 경계에 맞춰 원본 명세를 문제문으로 작성합니다. 테스트와 참조 구현은 서버에 고정하고, Reviewer·Runner 입력에는 참조 정답을 전달하지 않습니다. **새 문제**는 직전과 다른 명세를 선택합니다. 역할 평가를 통과하지 못한 응답은 Live 풀이 화면에 공개하지 않고 상세 기록에 보존합니다.
+
+Mock Agent·Judge는 연결 시연용 고정 응답입니다. **실제 코드 실행 여부는 모델과 별개인 서버의 `SANDBOX_MODE` 설정**을 따르며, Mock sandbox에서는 `not_executed`와 미집계 통계를 표시합니다. 실제 모델 검토에는 Agent·Judge 모델과 API 키가, 실제 코드 실행에는 기존 Docker sandbox 서비스가 필요합니다. 각 생성/제출은 별도 Run과 요청 예산(40회)을 사용하며 기존 worker 큐에서 처리합니다. Live 문제는 HumanEval 선택 목록 및 일괄 실험 데이터에 섞이지 않습니다.
+
+API는 `POST /api/live/sessions`, `GET /api/live/sessions/{id}`, `POST /api/live/sessions/{id}/submissions`이며 생성·제출에 `Idempotency-Key`가 필요합니다. 제출 본문은 `{"code":"..."}`이고 최대 20,000자입니다. `GET`의 `submission_id`로 같은 세션의 과거 제출을 조회할 수 있습니다. 새 DB 테이블이나 migration 없이 기존 Run·Call·Candidate·Job·평가 기록을 재사용합니다.
 
 ### 정답·오답 후보 100문제 일괄 실험
 
@@ -187,7 +203,7 @@ CSV는 **문제 × Round × 역할별 한 행**이며, 100문제·1 Round이면 
 초기 adapter는 OpenAI Responses API를 사용합니다. `OPENAI_API_KEY`가 이미 셸 환경변수로 export되어 있다면 `.env`에는 허용할 모델 이름만 설정하세요. 예를 들어:
 
 ```dotenv
-OPENAI_MODELS=gpt-5.4-nano
+OPENAI_MODELS=gpt-5.4-nano,gpt-5.6-luna
 ```
 
 키가 설정된 터미널에서 API·worker를 재생성합니다. Docker Compose는 셸의 `OPENAI_API_KEY`를 worker에 전달합니다. 셸 환경변수는 `.env`보다 우선하며, `.env`의 `OPENAI_API_KEY=`가 비어 있어도 셸의 키를 사용합니다. 셸에 키가 없다면 로컬 `.env`에 설정할 수도 있습니다.
@@ -197,6 +213,8 @@ docker compose up -d --force-recreate api worker
 ```
 
 화면을 새로고침하고 **Agent 모델**과 **Judge 모델**에서 사용할 모델을 각각 선택한 뒤 **새 실행 시작**을 누르세요. 기존 run의 모델 설정은 바뀌지 않습니다. 모델 이름 여러 개는 쉼표로 구분합니다.
+
+GPT-5.6 Luna의 API 모델 ID는 `gpt-5.6-luna`입니다. 같은 허용 목록을 단일·일괄 실험의 Agent/Judge, 저장 응답 재평가의 Judge, Judge 전용 재실행 화면에서 사용하므로 각 화면에서 이 모델을 선택할 수 있습니다. GPT-5.6 Luna는 현재 adapter가 사용하는 Responses API, function calling, structured outputs를 지원합니다. 지원 기능은 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.6-luna)에서 확인할 수 있습니다. 기본 선택값은 `mock`이며, 실제 호출에는 해당 모델 접근 권한이 있는 API 키가 필요합니다.
 
 모델은 해당 계정에서 Responses API를 지원해야 하며, runner 모델은 function calling, Judge 모델은 JSON 출력을 지원해야 합니다. 특정 모델을 자동 선택하거나 유료 검증 호출을 실행하지 않습니다. API 키는 worker에만 전달하고 업무 DB에는 저장하지 않습니다. GPT-5.4 nano의 지원 기능과 상태는 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.4-nano)에서 확인할 수 있습니다.
 

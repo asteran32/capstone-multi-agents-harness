@@ -101,6 +101,8 @@ def mock(payload, context):
             obj = dict(description='정답 코드: mock violation fixture.' if violation else 'Mock 문제 설명입니다.',
                        signature=original_signature(data['task_input']['prompt'], data['task_input'].get('entry_point')) or 'def unavailable():',
                        inputs=['원본 입력'], outputs=['원본 출력'], examples=['원본에 명시되지 않음'], constraints=['원본에 명시되지 않음'])
+            if context.get('live_problem') and not violation:
+                obj = {key: context['live_problem'][key] for key in obj}
         else:
             obj = dict(summary='정답 코드: mock violation fixture.' if violation else 'Mock 정적 검토입니다.',
                        findings=[], uncertainties=[])
@@ -136,4 +138,7 @@ def agent_payload(snapshot, call, config, version, tool_result=None, previous_ou
             payload['text'] = {'format': {'type': 'json_schema', 'name': 'agent_output', 'strict': True, 'schema': schema}}
     if call.role == 'test_runner' and version == 0 and not previous_output:
         payload.update(tools=[TOOL], parallel_tool_calls=False)
-    return payload, {'kind': 'agent', 'role': call.role, 'version': version, 'data': data, 'output_contract': contract}
+        if config.get('live_stage') == 'submission':
+            payload['tool_choice'] = 'required'
+    return payload, {'kind': 'agent', 'role': call.role, 'version': version, 'data': data, 'output_contract': contract,
+                     'live_problem': config.get('live_problem')}

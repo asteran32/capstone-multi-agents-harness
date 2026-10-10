@@ -14,8 +14,13 @@ class Conflict(ValueError):
     pass
 
 
-def create_run(s, body, key, evaluation_config=None, recovery_strategy='feedback'):
+def create_run(s, body, key, evaluation_config=None, recovery_strategy='feedback', execution_roles=None):
     request = body.model_dump(mode='json')
+    selected_roles = tuple(execution_roles) if execution_roles is not None else ROLES
+    if not selected_roles or len(set(selected_roles)) != len(selected_roles) or any(role not in ROLES for role in selected_roles):
+        raise ValueError('실행할 역할이 올바르지 않습니다.')
+    if execution_roles is not None:
+        request['execution_roles'] = list(selected_roles)
     request_hash = digest(request if evaluation_config is None else {**request, 'frozen_evaluator': evaluation_config,
                                                                    'recovery_strategy': recovery_strategy})
     existing = s.scalar(select(Run).where(Run.idempotency_key == key))
@@ -51,7 +56,7 @@ def create_run(s, body, key, evaluation_config=None, recovery_strategy='feedback
     s.flush()
     plan = []
     for round_index in range(1, body.rounds + 1):
-        for role in ROLES:
+        for role in selected_roles:
             call = Call(id=uid(), run_id=run.id, task_id=task.id,
                         candidate_id=None if role == ROLES[0] else candidate.id,
                         role=role, round_index=round_index, call_seq=len(plan) + 1,
