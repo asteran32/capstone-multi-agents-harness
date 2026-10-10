@@ -10,6 +10,7 @@ from .contracts import ROLES, TERMINAL
 from .db import Call, Evaluation, Job, Log, ModelRequest, Response, Run, Snapshot, ToolExecution, now
 from .exports import usage_summary
 from .evaluation_v2 import recovery_effect, uncertainty_reasons
+from .few_shot_analytics import few_shot_analytics
 
 VERDICTS = ('violated', 'compliant', 'uncertain')
 FAILURE_KINDS = ('schema', 'evidence_missing', 'evidence_mismatch', 'authority_conflict', 'unexpected_evidence', 'provider', 'budget', 'unknown')
@@ -90,6 +91,14 @@ def batch_analytics(s, batch):
     def event(kind, call, detail, version=0, **values):
         events.append({'id': f'{kind}:{call.id}:{version}:{len(events)}', 'kind': kind,
                        **location(call, version), 'detail': detail, **values})
+
+    few_shot, applications = few_shot_analytics(s, batch, runs, by_id, requests)
+    for application in applications:
+        event('few_shot', by_id[application['call_id']],
+              f"누적 few-shot {len(application['example_ids'])}개를 포함한 Agent 생성 시도",
+              application['response_version'],
+              **{key: value for key, value in application.items() if key not in ('call_id', 'role', 'response_version')},
+              phase='online')
 
     initial_evs, final_evs = [], []
     generated = selected = compliant = terminal_unselected = 0
@@ -364,6 +373,7 @@ def batch_analytics(s, batch):
             'evaluation_completion': fraction(initial_states['completed'], generated)},
         'initial': verdict_summary(initial_evs), 'final': verdict_summary(final_evs),
         'compliant_delivery': fraction(compliant, len(calls)), 'roles': roles,
+        'few_shot': few_shot,
         'unresolved': {'rate': fraction(call_states['unresolved'], len(calls)), 'primary_causes': dict(unresolved_reasons)},
         'uncertainty': {scope: {'evaluations': counts['evaluations'], 'causes': {k: v for k, v in counts.items() if k != 'evaluations'}}
                         for scope, counts in uncertainty_counts.items()},
