@@ -1,4 +1,5 @@
 .batch-checkbox{display:flex;align-items:center;gap:8px}
+.setup form>.batch-checkbox{grid-column:1/-1}
 .batch-checkbox input{width:auto;margin:0}
 .batch-estimate{border-top:1px solid var(--line);padding-top:16px;font-size:12px}
 .batch-estimate p{font-size:10px;color:var(--muted);margin:5px 0 0}

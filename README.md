@@ -132,6 +132,12 @@ LLM Judge의 공통 판정 기준(`common_rubric`), 세 역할별 기준(`role_r
 
 Agent 예시는 L1 / L1+L2 / FULL의 역할 프롬프트에만 포함됩니다. Judge는 평가 대상 역할의 예시만 받고, 실제 대상 응답과 예시를 분리합니다. Agent 예시를 Judge 정책 요구사항으로 다시 전달하지 않습니다. 예시 없는 기존 정책과 저장된 평가 프로필도 지원합니다. 기존 배치의 모드 변경 재실행은 이전 Agent 정책을 유지하고 Judge는 새 배치 생성 시 최신 파일을 읽습니다. 세 Agent에도 새 기본 예시를 적용하려면 화면을 새로고침하고 새 실험을 생성하세요. 이번 few-shot 추가는 평가 권한·서버 검사·L3 발동 조건을 변경하지 않습니다.
 
+단일·일괄 실험의 **검증된 복구 사례를 누적 few-shot으로 적용**은 기본으로 켜져 있습니다(`learned_few_shot: true`). 종료된 이전 실험의 `FULL → feedback → 응답 변경 → 준수 판정` 기록에서 같은 정책·Agent 모델·sandbox 환경·평가 버전에 맞는 사례를 고릅니다. 최초 위반과 복구 준수 모두 Judge 검증을 통과해야 하며, 복구 응답은 준수 이력에도 사용 가능한 상태여야 합니다. Judge 판정 오류, 불확실·미해결 복구, 응답을 바꾸지 않은 재판정, 진행 중인 배치의 결과는 제외합니다. Mock 사례는 Mock에만 적용됩니다.
+
+DB의 기존 응답·평가 기록을 누적 사례 저장소로 사용합니다. 새 실험을 생성할 때 최근의 서로 다른 문제 사례를 역할별 최대 3개 선택하고 `few_shot_snapshot`에 원문·출처·개선 항목·해시를 고정합니다. 사례 하나는 6,000 bytes, 역할별 목록은 12,000 bytes 이하이며, 초과한 사례는 자르지 않고 제외합니다. Agent에는 해당 역할의 입력과 검증된 수정 후 출력만 추가하고, 현재와 같은 문제 ID 또는 문제문인 사례는 제외합니다. Runner 예시에는 수정 후 보고와 일치하는 기존 도구 결과를 함께 제공합니다. 실제 적용 내용은 호출의 입력 snapshot에서 확인할 수 있습니다.
+
+실험 실행·L3 재시도 중에는 예시를 바꾸지 않습니다. 배치 전체와 **같은 구성으로 다시 실행**, 평가 후 모드 비교는 같은 예시 사본을 사용합니다. 새로 쌓인 복구 사례까지 반영하려면 새 실험을 생성하세요. Base·Live 및 기존에 생성된 실행에는 누적 예시를 추가하지 않습니다. 옵션을 끄면 기본 역할 예시만 사용하므로 적용 효과를 비교할 수 있습니다. 역할 정책과 Judge 기준·`evaluation_version`은 그대로 두고 예시 버전은 별도 SHA-256으로 기록합니다. 이 기능은 과거 검증 결과를 재사용하는 프롬프트 개선이며, 모델 가중치 학습이나 개선 절차 자체의 진화는 아닙니다. 실제 정확도·준수율 향상은 별도 비교 실험으로 확인해야 합니다.
+
 새 실험과 재평가 검증 세트를 만들 때 Judge 파일을 읽어 `evaluation_profile`에 저장합니다. 한 배치의 모든 Run은 같은 사본을 사용하며, 실제 Judge 요청과 재시도는 저장된 사본을 사용합니다. 문구 변경은 새 설정의 `evaluation_version`에 반영되고, 기존 실험·검증 세트 및 검증된 평가 기준을 사용하는 비교 실험은 고정된 기준을 유지합니다. Docker에서는 파일을 이미지에 포함하므로 편집 후 `docker compose build api`와 `docker compose up -d --no-deps api worker`로 반영합니다. 실행 중인 실험이 끝난 뒤 재시작하세요.
 
 Judge 검증 수정 프로필 `guardrail-3.2`는 모든 판정의 `reason`에 `minLength: 1`과 `pattern: "\\S"`를 적용해 빈 문자열·공백만 있는 이유를 차단합니다. `validation_protocol: all-schema-errors-1`은 해석 가능한 JSON의 스키마 오류를 기준·필드 경로·오류 코드별로 모두 수집하며, `failed_rules`와 요약 `error`가 온라인 평가 및 저장 응답 재평가의 다음 Judge 요청에 전달됩니다. 기존 프로필은 저장된 스키마와 검증 동작을 유지합니다. 배치 `30655c50`의 실패 응답 15개(빈 이유 43개)는 회귀 테스트 fixture로 보존했습니다. `gpt-5.4-nano`의 새 스키마 수용과 응답 검증을 확인했으며, 실제 실험의 실패율 개선은 별도 재평가가 필요합니다.
@@ -169,7 +175,7 @@ CSV는 **문제 × Round × 역할별 한 행**이며, 100문제·1 Round이면 
 
 | 열 | 의미 |
 |---|---|
-| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(4), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
+| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(5), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
 | `analysis_revision`, `m4_threshold` | 다운로드 시점의 분석 설정 revision과 threshold(0~1, 미설정은 빈 값) |
 | `batch_index`, `source_task_id`, `task_sha256`, `candidate_sha256`, `run_id` | 문제 순번, 데이터·후보 식별 및 Run 연결 |
 | `mode`, `agent_model`, `judge_model`, `sandbox_mode`, `policy_hash`, `evaluation_version`, `max_requests` | 실행 당시 고정된 비교 조건 |
@@ -179,6 +185,7 @@ CSV는 **문제 × Round × 역할별 한 행**이며, 100문제·1 Round이면 
 | `evaluation_phase`, `initial_*`, `recovery_*`, `final_*` | L1은 Offline, L1+L2·FULL은 Online 평가. 최초·복구·최종 선택의 종합·Lexical·적용 INFO/SCOPE/EXEC 판정, 원래 Judge 근거와 인용·실행 검증 결과 |
 | `initial_schema_valid`, `initial_evidence_valid`, `initial_validation_failure_kind` 등 | 최초·복구·최종 선택 평가의 구조화된 검증 결과. `evidence_required`로 인용 검사 대상 여부 구분. 과거 미기록 값은 빈 값 |
 | `recovery_strategy`, `recovery_feedback`, `recovery_effect` | 복구 전략, 원본 응답·확인된 위반 피드백, 응답 변경·동일 응답 재판정·평가 오류 해소의 구분 |
+| `learned_few_shot`, `few_shot_sha256`, `few_shot_example_ids` | CSV schema v5: 누적 예시 적용 설정·고정 예시 버전·해당 호출에 적용한 사례 ID. 아직 입력 snapshot이 없으면 사례 ID는 빈 값 |
 | `*_judgment_resolution`, `*_uncertainty_reasons` | 서버/Judge 적용 판정·주체·충돌 및 불확실성 원인. 과거 미측정 판정 충돌은 새로 추정하지 않음 |
 | `initial_window_count`, `initial_V`, `initial_C`, `initial_U`, `initial_role_violation_rate`, `initial_decision_coverage`, `initial_warmup` | 최초 응답 기준 역할별 최근 최대 5건의 저장된 지표. 배치 전체의 비율이 아님 |
 | `agent_*`, `judge_*` | Agent와 선택 평가 단계의 Judge 요청·실패 건수, 사용량 보고 건수, 입력·출력·합계 토큰. 후속 요청·재시도·복구 포함 |

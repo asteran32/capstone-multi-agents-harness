@@ -5,6 +5,7 @@ import {BatchAnalytics} from './BatchAnalytics';
 import {ReevaluationPanel} from './ReevaluationPanel';
 import {JudgeReplayPanel} from './JudgeReplayPanel';
 import {defaultPrompts} from './defaultPrompts';
+import {LearnedExamples} from './LearnedExamples';
 import './batches.css';
 
 const modes: ExperimentMode[] = ['L1', 'L1+L2', 'FULL'];
@@ -19,6 +20,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
 }) {
  const [mode,setMode]=useState<ExperimentMode>('L1'), [rounds,setRounds]=useState(1);
  const [candidateLabel,setCandidateLabel]=useState<'correct'|'incorrect'>('correct');
+ const [learnedFewShot,setLearnedFewShot]=useState(true);
  const [agent,setAgent]=useState('mock'), [judge,setJudge]=useState('mock'), [budget,setBudget]=useState(1000);
  const [evaluate,setEvaluate]=useState(true), [prompts,setPrompts]=useState(()=>({...defaultPrompts})), [policy,setPolicy]=useState(config.policy_raw as string);
  const [batch,setBatch]=useState<Batch|null>(null), [archive,setArchive]=useState<{items:Batch[];total:number}>({items:[],total:0});
@@ -74,12 +76,14 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
  return <div className="workspace batch-workspace">
   <aside className="setup">
    <div className="section-title"><span className="eyebrow">BATCH EXPERIMENT</span><h2>{taskCount}문제 일괄 실행</h2><p className="muted">{taskRange}에서 선택한 유형의 후보를 번호순으로 실행합니다. 각 역할은 이 배치에서 자신의 최신 준수 출력 1개를 이어받습니다. 첫 준수 판정 전에는 이력이 비어 있습니다.</p></div>
-   <form onSubmit={e=>{e.preventDefault();submit('/batches',{mode,rounds,candidate_label:candidateLabel,agent_model:agent,judge_model:judge,prompts_by_role:prompts,policy_raw:policy,budget:{max_requests:budget},evaluate_l1:evaluate},createKey)}}>
+   <form onSubmit={e=>{e.preventDefault();submit('/batches',{mode,rounds,candidate_label:candidateLabel,agent_model:agent,judge_model:judge,prompts_by_role:prompts,policy_raw:policy,budget:{max_requests:budget},evaluate_l1:evaluate,learned_few_shot:learnedFewShot},createKey)}}>
     <label>후보 코드<select value={candidateLabel} onChange={e=>setCandidateLabel(e.target.value as 'correct'|'incorrect')}><option value="correct">정답 후보</option><option value="incorrect">오답 후보</option></select></label>
     <label>실험 모드<select value={mode} onChange={e=>setMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
     <div className="two-fields"><label>문제당 Round<input type="number" min={1} max={20} value={rounds} onChange={e=>setRounds(Number(e.target.value))} required/></label><label>Run당 최대 API 요청<input type="number" min={1} max={2000} value={budget} onChange={e=>setBudget(Number(e.target.value))} required/></label></div>
     <label>Agent 모델<select value={agent} onChange={e=>setAgent(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
     <label>Judge 모델<select value={judge} onChange={e=>setJudge(e.target.value)}>{config.models.map((m:string)=><option key={m}>{m}</option>)}</select></label>
+    <label className="batch-checkbox"><input type="checkbox" checked={learnedFewShot} onChange={e=>setLearnedFewShot(e.target.checked)}/>검증된 복구 사례를 누적 few-shot으로 적용</label>
+    <p className="muted">이전 실험의 사례를 역할별 최대 3개 선택합니다. 배치 시작 시 고정하며, 끄면 기본 역할 예시만 사용합니다.</p>
     <label className="batch-checkbox"><input type="checkbox" checked={evaluate} onChange={e=>setEvaluate(e.target.checked)}/>L1 응답 생성 후 자동 사후 평가</label>
     <p className="muted">L1+L2와 FULL은 온라인 평가를 사용합니다. L1 사후 평가는 Run당 동일한 별도 요청 한도를 사용합니다. L1 자동 사후 평가를 끄면 준수 이력이 쌓이지 않습니다.</p>
     <details className="requests"><summary>역할별 사용자 요청</summary>{roles.map(role=><label key={role}>{names[role]}<textarea aria-label={`${names[role]} 사용자 요청`} rows={6} value={prompts[role]} onChange={e=>setPrompts({...prompts,[role]:e.target.value})} required/></label>)}<p className="muted">공통 정책의 역할·출력 형식에 맞춘 기본 요청입니다. 정책을 수정하면 사용자 요청도 함께 확인하세요.</p></details>
@@ -96,6 +100,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
      <progress value={batch.finished_runs} max={batch.total_runs} aria-label="처리된 문제 수"/>
      <p>{batch.mode} · {candidateName(batch.config_snapshot.candidate_label)} · 문제당 {batch.config_snapshot.rounds} Round · Agent {batch.config_snapshot.agent_model} · Judge {batch.config_snapshot.judge_model}</p>
      <p className="muted">{batch.config_snapshot.history_limit===1?'History: 역할별 최신 준수 출력 최대 1개 · 이 배치 안에서만 공유':'기존 History: 문제·역할별 이전 작업 최대 5개 · 문제 간 공유 없음'}</p>
+     <LearnedExamples config={batch.config_snapshot}/>
      <p className="muted">{new Date(batch.created_at).toLocaleString('ko-KR')} · {batch.id.slice(0,8)}{batch.mode==='L1'&&batch.config_snapshot.evaluate_l1?' · 사후 평가 포함':''}</p>
      {batch.source_batch_id&&<button className="text-button" onClick={()=>onBatch(batch.source_batch_id!)}>원본 일괄 실행 보기 →</button>}
      {!finished.includes(batch.status)&&<button disabled={busy||batch.status==='cancel_requested'} onClick={async()=>{setBusy(true);try{await post(`/batches/${batch.id}/cancel`);setReload(x=>x+1)}catch(e){onError(String(e))}finally{setBusy(false)}}}>남은 실행 취소</button>}
@@ -104,7 +109,7 @@ export function BatchWorkspace({config, batchId, onBatch, onRun, onError}: {
     <JudgeReplayPanel key={'judge-replay:'+batch.id} batch={batch} config={config} onInspect={onRun} onError={onError}/>
     <ReevaluationPanel key={'reevaluation:'+batch.id} batch={batch} config={config} onBatch={onBatch} onInspect={onRun} onError={onError}/>
     <section className="batch-rerun" aria-label="모드를 바꿔 다시 실행">
-     <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·선택한 후보·모델·정책·요청·Round를 유지하고 빈 이력에서 다시 시작합니다. 새 실행에는 최신 준수 출력 1개 규칙이 적용됩니다.</p></div>
+     <div><h2>같은 구성으로 다시 실행</h2><p className="muted">문제·선택한 후보·모델·정책·요청·Round와 누적 few-shot을 유지하고 빈 이력에서 다시 시작합니다. 새 복구 사례까지 반영하려면 왼쪽에서 새 일괄 실험을 시작하세요.</p></div>
      <label>새 실험 모드<select value={rerunMode} onChange={e=>setRerunMode(e.target.value as ExperimentMode)}>{modes.map(m=><option key={m}>{m}</option>)}</select></label>
      <button className="primary" disabled={busy} onClick={()=>submit(`/batches/${batch.id}/rerun`,{mode:rerunMode},rerunKey)}>이 모드로 {batch.total_runs}문제 새 실행</button>
     </section>

@@ -73,6 +73,7 @@ def create_session(s, body, key, request_hash):
     next(role for role in policy['roles'] if role['role'] == 'problem_designer')['base_task'] = (
         '제공된 Easy 난이도의 원본 명세를 바탕으로 LeetCode 스타일의 문제 설명만 작성한다.')
     body_run = RunCreate(task_id=task.id, candidate_id=candidate.id, mode=body.mode,
+                         learned_few_shot=False,
                          agent_model=body.agent_model, judge_model=body.judge_model,
                          policy_raw=canonical(policy), prompts_by_role=PROMPTS,
                          budget={'max_requests': 40, 'max_input_bytes': 120000, 'max_output_tokens': 2500})
@@ -117,6 +118,7 @@ def submit_code(s, session, body, key, request_hash):
     if digest(candidate.code) != candidate.code_sha256:
         raise ValueError('저장된 제출 코드 해시가 일치하지 않습니다.')
     run_body = RunCreate(task_id=task.id, candidate_id=candidate.id, mode=config['mode'],
+                        learned_few_shot=False,
                         agent_model=config['agent_model'], judge_model=config['judge_model'],
                         policy_raw=config['policy_raw'], prompts_by_role=config['prompts_by_role'], budget=config['budget'])
     run = create_run(s, run_body, key, evaluation_config=config, execution_roles=('code_reviewer', 'test_runner'))

@@ -113,6 +113,7 @@ class ExecutionSettings(Strict):
     rounds: int = Field(default=1, ge=1, le=20)
     history_limit: Literal[1] = 1
     max_recovery_attempts: Literal[1] = 1
+    learned_few_shot: bool = True
     agent_model: str = 'mock'
     judge_model: str = 'mock'
     prompts_by_role: dict[Role, str]

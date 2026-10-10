@@ -167,7 +167,9 @@ def submit_batch(body, key, source_id=None):
         with transaction() as s:
             source = require(s, Batch, source_id) if source_id else None
             if source:
-                body = BatchCreate(**{**source.config_snapshot, 'mode': body.mode, 'history_limit': 1})
+                settings = {k: v for k, v in source.config_snapshot.items() if k in BatchCreate.model_fields}
+                body = BatchCreate(**{**settings, 'mode': body.mode, 'history_limit': 1,
+                                      'learned_few_shot': settings.get('learned_few_shot', False)})
             batch = create_batch(s, body, key, source)
             return batch_summary(s, batch, detail=True)
     except Conflict as exc:

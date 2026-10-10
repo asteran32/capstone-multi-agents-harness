@@ -207,7 +207,9 @@ def router(authenticate, require, key_required):
                 for rounds in body.rounds:
                     for mode in ('L1', 'L1+L2', 'FULL'):
                         for strategy in body.recovery_strategies if mode == 'FULL' else ['feedback']:
-                            config = {**source.config_snapshot, 'mode': mode, 'rounds': rounds, 'evaluate_l1': True,
+                            config = {**{k: v for k, v in source.config_snapshot.items() if k in BatchCreate.model_fields},
+                                      'mode': mode, 'rounds': rounds, 'evaluate_l1': True,
+                                      'learned_few_shot': source.config_snapshot.get('learned_few_shot', False),
                                       'history_limit': 1,
                                       'policy_raw': evaluator['policy_raw'], 'judge_model': evaluator['judge_model'],
                                       'budget': {**source.config_snapshot['budget'],

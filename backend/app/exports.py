@@ -10,6 +10,7 @@ from sqlalchemy import select
 from .batches import batch_summary
 from .db import Call, Evaluation, Job, ModelRequest, Response, Run, Snapshot, ToolExecution, now
 from .evaluation_v2 import recovery_effect, uncertainty_reasons
+from .learned_examples import examples_for
 
 
 EVALUATION_FIELDS = ('evaluation_status', 'verdict', 'lexical_verdict', 'lexical_match_count',
@@ -28,6 +29,7 @@ COLUMNS = (
     'call_id', 'call_seq', 'round_index', 'role', 'call_status', 'started_at', 'finished_at', 'generation_duration_ms',
     'user_prompt', 'call_error', 'history_count', 'recovery_attempted', 'reset_reason', 'response_count',
     'recovery_strategy', 'recovery_feedback', 'recovery_effect',
+    'learned_few_shot', 'few_shot_sha256', 'few_shot_example_ids',
     'initial_response_text', 'initial_format_error', 'recovery_response_text', 'selected_response_id',
     'selected_response_version', 'final_response_text', 'final_format_error', 'evaluation_phase',
     *(f'{prefix}_{field}' for prefix in ('initial', 'recovery', 'final') for field in EVALUATION_FIELDS),
@@ -100,7 +102,8 @@ def batch_results_csv(s, batch):
     evaluations = {(e.response_id, e.phase, e.evaluation_version): e for e in s.scalars(
         select(Evaluation).join(Response, Response.id == Evaluation.response_id).where(Response.call_id.in_(call_ids)))}
     snapshots = {(row.call_id, row.response_version): row for row in s.execute(select(
-        Snapshot.call_id, Snapshot.response_version, Snapshot.ordered_history, Snapshot.reset_reason, Snapshot.recovery_feedback
+        Snapshot.call_id, Snapshot.response_version, Snapshot.ordered_history, Snapshot.reset_reason, Snapshot.recovery_feedback,
+        Snapshot.task_input['prompt'].as_string().label('task_prompt')
     ).where(Snapshot.call_id.in_(call_ids)))}
     requests, tools, jobs = defaultdict(list), defaultdict(list), defaultdict(dict)
     # Read only the usage subfield of provider responses, not large request/response payloads.
@@ -130,7 +133,7 @@ def batch_results_csv(s, batch):
         final_ev = evaluations.get((selected.id, phase, config['evaluation_version'])) if selected else None
         recovery_ev = evaluations.get((recovery.id, phase, config['evaluation_version'])) if recovery else None
         row = {
-            'csv_schema_version': 4, 'exported_at': exported_at, 'batch_id': batch.id,
+            'csv_schema_version': 5, 'exported_at': exported_at, 'batch_id': batch.id,
             'analysis_revision': (batch.analysis_settings or {}).get('revision', 0),
             'm4_threshold': (batch.analysis_settings or {}).get('m4_threshold'),
             'source_batch_id': batch.source_batch_id, 'batch_status': summary['status'], 'batch_created_at': batch.created_at,
@@ -153,6 +156,10 @@ def batch_results_csv(s, batch):
             'recovery_strategy': config.get('recovery_strategy', 'reset'),
             'recovery_feedback': reset.recovery_feedback if reset else None,
             'recovery_effect': recovery_effect(initial, recovery, initial_ev, recovery_ev) if reset else None,
+            'learned_few_shot': config.get('learned_few_shot', False),
+            'few_shot_sha256': config.get('few_shot_snapshot', {}).get('sha256'),
+            'few_shot_example_ids': [example['id'] for example in examples_for(config, call.role, {'prompt': snapshot.task_prompt})]
+                if snapshot else None,
             'response_count': len(versions), 'initial_response_text': initial.raw_text if initial else None,
             'initial_format_error': initial.format_error if initial else None,
             'recovery_response_text': recovery.raw_text if recovery else None,

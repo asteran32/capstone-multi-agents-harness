@@ -10,10 +10,13 @@ from .services import Conflict, DEFAULT_POLICY, create_run
 JOB_TERMINAL = ('completed', 'failed', 'cancelled')
 
 
-def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, evaluation_config=None, recovery_strategy='feedback'):
+def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, evaluation_config=None,
+                 recovery_strategy='feedback', few_shot_snapshot=None):
     request = {'settings': body.model_dump(mode='json'), 'source_batch_id': source.id if source else None}
     if evaluation_config:
         request.update(frozen_evaluator=evaluation_config, recovery_strategy=recovery_strategy)
+    if few_shot_snapshot is not None:
+        request['few_shot_snapshot'] = few_shot_snapshot
     request_hash = digest(request)
     existing = s.scalar(select(Batch).where(Batch.idempotency_key == key))
     if existing:
@@ -62,13 +65,18 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
     s.flush()
     manifest, previous_key = [], None
     frozen_evaluator = evaluation_config
+    frozen_examples = few_shot_snapshot if few_shot_snapshot is not None else (
+        source.config_snapshot.get('few_shot_snapshot') if source else None)
     for index, (task, candidate) in enumerate(selected, 1):
         run_body = RunCreate(**{k: v for k, v in config.items() if k not in ('evaluate_l1', 'candidate_label')},
                              task_id=task.id, candidate_id=candidate.id)
-        run = create_run(s, run_body, f'batch:{batch.id}:{index}', frozen_evaluator, recovery_strategy)
+        run = create_run(s, run_body, f'batch:{batch.id}:{index}', frozen_evaluator, recovery_strategy,
+                         few_shot_snapshot=frozen_examples)
         if frozen_evaluator is None:
             # All runs share one evaluator even if judge.yaml changes during creation.
             frozen_evaluator = run.config_snapshot
+        if frozen_examples is None:
+            frozen_examples = run.config_snapshot['few_shot_snapshot']
         run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index}
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run'))
         job.payload = {**job.payload, 'batch_id': batch.id, 'depends_on_key': previous_key}
@@ -86,6 +94,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
                          'source_version': task.source_version, 'candidate_id': candidate.id,
                          'candidate_sha256': candidate.code_sha256})
     batch.manifest = manifest
+    batch.config_snapshot = {**config, 'few_shot_snapshot': frozen_examples}
     s.flush()
     return batch
 
