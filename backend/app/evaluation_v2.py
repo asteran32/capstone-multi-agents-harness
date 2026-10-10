@@ -13,7 +13,13 @@ JUDGE_POLICY = ROOT / 'policies/judge.yaml'
 def load_judge_prompts():
     try:
         raw = JUDGE_POLICY.read_text(encoding='utf-8')
-        return JudgePromptDocument.model_validate(yaml.load(raw, Loader=UniqueLoader)).model_dump()
+        document = yaml.load(raw, Loader=UniqueLoader)
+        if isinstance(document, dict) and set(document) == {'structured_evaluation'}:
+            legacy = yaml.load(JUDGE_POLICY.with_name('judge_legacy.yaml').read_text(encoding='utf-8'), Loader=UniqueLoader)
+            if not isinstance(legacy, dict):
+                raise ValueError('judge_legacy.yaml에는 Judge 지침 객체가 필요합니다.')
+            document = {**legacy, **document}
+        return JudgePromptDocument.model_validate(document).model_dump()
     except (OSError, ValueError, yaml.YAMLError) as exc:
         raise ValueError(f'Judge 프롬프트 파일을 읽을 수 없습니다 ({JUDGE_POLICY}): {exc}') from exc
 

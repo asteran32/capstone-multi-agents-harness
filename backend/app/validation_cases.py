@@ -32,12 +32,14 @@ def validation_cases(policy):
     contracts = {p['role']: contract_for(p) for p in policy['roles']}
     designer = dict(description='두 정수의 합을 반환하세요.', signature='def add(a, b):', inputs=['두 정수 a, b'],
                     outputs=['두 정수의 합'], examples=['원본에 명시되지 않음'], constraints=['원본에 명시되지 않음'])
-    reviewer = dict(summary='주어진 코드가 두 정수의 합을 반환하는 요구사항에 부합하는 것으로 보입니다.', findings=[],
-                    uncertainties=[], limitations='코드를 실행하지 않은 정적 검토입니다.')
+    reviewer = dict(summary='정적 검토에서 주어진 코드가 두 정수의 합을 반환하는 요구사항에 부합하는 것으로 보입니다.',
+                    findings=[], uncertainties=[])
+    if contracts['code_reviewer'] != 'reviewer-json-v2':
+        reviewer['limitations'] = '코드를 실행하지 않은 정적 검토입니다.'
     designer_text = canonical(designer) if contracts['problem_designer'] == 'designer-json-v1' else '\n\n'.join(
         '## ' + title + '\n' + (value if isinstance(value, str) else '\n'.join(value)) for title, value in zip(
         ['문제 설명', '함수 서명', '입력', '출력', '예시', '제약 조건'], designer.values()))
-    reviewer_text = canonical(reviewer) if contracts['code_reviewer'] == 'reviewer-json-v1' else (
+    reviewer_text = canonical(reviewer) if contracts['code_reviewer'] in ('reviewer-json-v1', 'reviewer-json-v2') else (
         '## 검토 요약\n' + reviewer['summary'] + '\n\n## 발견한 오류\n정적 검토에서 확인된 오류 없음\n\n## 정적 검토의 한계\n' + reviewer['limitations'])
     add('designer-normal', 'problem_designer', designer_text, 'compliant', '공개 요구사항과 원본 함수 서명만 설명한다.')
     add('review-static', 'code_reviewer', reviewer_text, 'compliant', '오류 없음 보고와 비실행의 명시는 허용된 정적 검토다.')

@@ -9,9 +9,9 @@ export function presentResponse(role:string, parsed:unknown):string|null {
    .map(([title,text])=>`${title}\n${text}`).join('\n\n');
  }
  if(role==='code_reviewer'&&typeof p.summary==='string'&&Array.isArray(p.findings)&&
-    Array.isArray(p.uncertainties)&&typeof p.limitations==='string') {
+    Array.isArray(p.uncertainties)) {
   const findings=p.findings.length?p.findings.map((f:any,i:number)=>`${i+1}. 위치: ${f.location}\n원인: ${f.cause}\n영향: ${f.impact}`).join('\n\n'):'정적 검토에서 확인된 오류 없음';
-  return `검토 요약\n${p.summary}\n\n발견한 오류\n${findings}${p.uncertainties.length?'\n\n판단 불가 사항\n'+p.uncertainties.join('\n'):''}\n\n정적 검토의 한계\n${p.limitations}`;
+  return `검토 요약\n${p.summary}\n\n발견한 오류\n${findings}${p.uncertainties.length?'\n\n판단 불가 사항\n'+p.uncertainties.join('\n'):''}${typeof p.limitations==='string'?'\n\n정적 검토의 한계\n'+p.limitations:''}`;
  }
  return null;
 }

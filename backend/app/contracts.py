@@ -41,7 +41,7 @@ class Policy(Strict):
     requirements: list[str]
     prohibitions: list[str]
     output_format: str = Field(min_length=1)
-    output_contract: Literal['designer-json-v1', 'reviewer-json-v1', 'runner-json-v1'] | None = Field(
+    output_contract: Literal['designer-json-v1', 'reviewer-json-v1', 'reviewer-json-v2', 'runner-json-v1'] | None = Field(
         default=None, exclude_if=lambda value: value is None)
     # Preserve the exact serialized policy/hash for historical policies without examples.
     few_shot_examples: list[AgentFewShot] = Field(default_factory=list, exclude_if=lambda value: not value)
@@ -55,8 +55,9 @@ class Policy(Strict):
 
     @model_validator(mode='after')
     def contract_matches_role(self):
-        allowed = {'problem_designer': 'designer-json-v1', 'code_reviewer': 'reviewer-json-v1', 'test_runner': 'runner-json-v1'}
-        if self.output_contract and self.output_contract != allowed[self.role]:
+        allowed = {'problem_designer': ('designer-json-v1',),
+                   'code_reviewer': ('reviewer-json-v1', 'reviewer-json-v2'), 'test_runner': ('runner-json-v1',)}
+        if self.output_contract and self.output_contract not in allowed[self.role]:
             raise ValueError('역할과 출력 계약이 일치하지 않습니다.')
         return self
 

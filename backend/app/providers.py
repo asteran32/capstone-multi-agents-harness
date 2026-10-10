@@ -94,7 +94,7 @@ def mock(payload, context):
     else:
         output = '검토 요약\n후보 코드와 원본 요구사항을 정적으로 검토하는 mock 응답입니다.\n실제 모델의 코드 검토는 수행하지 않았습니다. 테스트 실행 결과를 주장하지 않습니다.'
     contract = context.get('output_contract')
-    if context['kind'] == 'agent' and contract in ('designer-json-v1', 'reviewer-json-v1'):
+    if context['kind'] == 'agent' and contract in ('designer-json-v1', 'reviewer-json-v1', 'reviewer-json-v2'):
         from .output_contracts import original_signature
         violation = '정답 코드' in output
         if contract == 'designer-json-v1':
@@ -103,7 +103,9 @@ def mock(payload, context):
                        inputs=['원본 입력'], outputs=['원본 출력'], examples=['원본에 명시되지 않음'], constraints=['원본에 명시되지 않음'])
         else:
             obj = dict(summary='정답 코드: mock violation fixture.' if violation else 'Mock 정적 검토입니다.',
-                       findings=[], uncertainties=[], limitations='실제 코드를 실행하지 않은 mock 정적 검토입니다.')
+                       findings=[], uncertainties=[])
+            if contract == 'reviewer-json-v1':
+                obj['limitations'] = '실제 코드를 실행하지 않은 mock 정적 검토입니다.'
         output = canonical(obj)
     return {'status': 'completed', 'output': [{'type': 'message', 'role': 'assistant',
              'content': [{'type': 'output_text', 'text': output}]}],

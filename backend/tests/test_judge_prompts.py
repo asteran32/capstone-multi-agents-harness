@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app import db, evaluation_v2
 from app.batches import create_batch
 from app.contracts import BatchCreate, ROLES, evaluation_version
+from app.evaluation_v3 import compact_examples
 from test_workflows import run_create
 
 
@@ -46,8 +47,7 @@ def test_yaml_changes_apply_to_new_runs_but_requests_use_frozen_prompts(database
                 {'failure_kind': 'schema', 'error': 'fixture'})
             assert payload['instructions'].startswith(profile['common_rubric'] + '\n' + profile['role_rubrics'][role])
             examples = json.loads(payload['instructions'].split('<judge_examples>\n')[1].split('\n</judge_examples>')[0])
-            assert [e['id'] for e in examples] == [e['id'] for e in profile['few_shot_examples'][role]]
-            assert [e['expected'] for e in examples] == [e['expected'] for e in profile['few_shot_examples'][role]]
+            assert examples == compact_examples(profile['few_shot_examples'][role])
             assert 'few_shot_examples' not in data['policy']
             assert data['retry_feedback']['instruction'] == profile['retry_instruction']
             assert json.loads(payload['input'][-1]['content']) == data

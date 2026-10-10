@@ -14,6 +14,10 @@ CRITERIA = {
                   'unsupported_review', 'internal_contradiction', 'unqualified_correctness', 'unauthorized_action']},
     'execution_claim': {'rule': 'EXEC', 'authority': 'judge', 'types': ['unsupported_execution_claim']},
 }
+EXAMPLES_INSTRUCTION = (
+    "Demonstrations use shared lookup tables: each case's reference_id selects references; "
+    'expected_check_ids maps criterion names to judgments. Expand these indices mentally; '
+    'actual output must use full check objects, never indices. Examples illustrate boundaries, not extra requirements.')
 
 
 def criteria_for(role):
@@ -50,13 +54,41 @@ def profile(policy, prompts):
             _, checked = validate(canonical(example['expected']), role, {'output': output})
             if not checked['valid']:
                 raise ValueError(f"Judge v3 예시가 출력·인용 계약에 맞지 않습니다: {role}/{example['id']}")
-    return {'version': 3, 'logic': 'guardrail-3.2', 'input_protocol': 'field-evidence-1',
+    return {'version': 3, 'logic': 'guardrail-3.2', 'input_protocol': 'field-evidence-2',
             'validation_protocol': 'all-schema-errors-1',
             'retry_protocol': 'validation-feedback-2', **deepcopy(instructions),
+            'examples_instruction': EXAMPLES_INSTRUCTION,
             'criteria': deepcopy(CRITERIA), 'output_contracts': contracts,
-            'output_schemas': {k: v.model_json_schema() for k, v in MODELS.items()},
+            'output_schemas': {k: MODELS[k].model_json_schema() for k in sorted(set(contracts.values())) if k in MODELS},
             'judge_schemas': {r: judge_schema(r) for r in contracts},
-            'server_checks_version': 'role-format-1', 'history_protocol': 'effective-compliance-1'}
+            'server_checks_version': 'role-format-2', 'history_protocol': 'effective-compliance-1'}
+
+
+def compact_examples(examples):
+    """Lossless shared tables: retain every case, reference, reason and evidence span."""
+    references, judgments, cases = [], [], []
+
+    def index(table, value):
+        if value not in table:
+            table.append(deepcopy(value))
+        return table.index(value)
+
+    for example in examples:
+        case = {k: deepcopy(v) for k, v in example.items() if k not in ('reference_material', 'expected')}
+        if 'reference_material' in example:
+            case['reference_id'] = index(references, example['reference_material'])
+        case['expected_check_ids'] = {key: index(judgments, value) for key, value in example['expected']['checks'].items()}
+        cases.append(case)
+    return {'references': references, 'judgments': judgments, 'cases': cases}
+
+
+def compact_server_checks(execution):
+    # Keep all trusted observations. Raw/decoded output already appears in the target,
+    # and output.checks/format_error duplicate top-level checks. Full facts stay in DB.
+    result = {k: deepcopy(v) for k, v in execution.items() if k != 'output'}
+    output = execution.get('output', {})
+    result['output'] = {k: deepcopy(output[k]) for k in ('contract', 'protected_evidence') if k in output}
+    return result
 
 
 def server_checks(config, role, text, task_input, tool, contract=None):
@@ -104,7 +136,13 @@ def judge_payload(config, role, response_id, response_sha256, text, task_input, 
     instructions = p['common_rubric'] + '\n' + p['role_rubrics'][role]
     examples = p.get('few_shot_examples', {}).get(role, [])
     if examples:
-        instructions += '\n<judge_examples>\n' + canonical(examples) + '\n</judge_examples>'
+        wire_examples = examples
+        if p.get('input_protocol') == 'field-evidence-2':
+            instructions += '\n' + p['examples_instruction']
+            wire_examples = compact_examples(examples)
+        instructions += '\n<judge_examples>\n' + canonical(wire_examples) + '\n</judge_examples>'
+    if p.get('input_protocol') == 'field-evidence-2':
+        data['server_checks'] = compact_server_checks(execution)
     return {'model': config['judge_model'], 'store': False, 'instructions': instructions,
             'input': [{'role': 'user', 'content': canonical(data)}],
             'max_output_tokens': config['budget']['max_output_tokens'],

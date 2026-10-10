@@ -25,16 +25,20 @@ class Finding(Strict):
     impact: PromptText
 
 
-class ReviewerOutput(Strict):
+class ReviewerOutputV2(Strict):
     summary: PromptText
     findings: list[Finding]
     uncertainties: list[PromptText]
+
+
+class ReviewerOutput(ReviewerOutputV2):
     limitations: PromptText
 
 
 MODELS = {'designer-json-v1': DesignerOutput, 'reviewer-json-v1': ReviewerOutput,
-          'runner-json-v1': RunnerReport}
-ROLE_CONTRACTS = dict(zip(('problem_designer', 'code_reviewer', 'test_runner'), MODELS))
+          'reviewer-json-v2': ReviewerOutputV2, 'runner-json-v1': RunnerReport}
+ROLE_CONTRACTS = {'problem_designer': 'designer-json-v1', 'code_reviewer': 'reviewer-json-v2',
+                  'test_runner': 'runner-json-v1'}
 DESIGNER_SECTIONS = {'문제 설명': 'description', '함수 서명': 'signature', '입력': 'inputs',
                      '출력': 'outputs', '예시': 'examples', '제약 조건': 'constraints'}
 REVIEWER_SECTIONS = {'검토 요약': 'summary', '발견한 오류': 'findings', '정적 검토의 한계': 'limitations'}
@@ -48,7 +52,8 @@ LEGACY_FORMATS = {
 def contract_for(policy):
     explicit = policy.get('output_contract')
     if explicit:
-        if explicit != ROLE_CONTRACTS[policy['role']]:
+        if explicit != ROLE_CONTRACTS[policy['role']] and not (
+                policy['role'] == 'code_reviewer' and explicit == 'reviewer-json-v1'):
             raise ValueError('역할과 출력 계약이 일치하지 않습니다.')
         return explicit
     if policy['role'] == 'test_runner':

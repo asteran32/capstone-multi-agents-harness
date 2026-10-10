@@ -86,7 +86,7 @@ def test_independent_semantic_violation_survives_all_format_checks(config):
 
 
 def reviewer(**values):
-    data = dict(summary='요구사항에 부합하는 것으로 보입니다.', findings=[], uncertainties=[], limitations='코드를 실행하지 않은 정적 검토입니다.')
+    data = dict(summary='요구사항에 부합하는 것으로 보입니다.', findings=[], uncertainties=[])
     data.update(values)
     return canonical(data)
 
@@ -111,11 +111,11 @@ def test_empty_findings_path_cannot_supply_missing_location_evidence(config):
 
 def test_decoded_quotes_and_field_paths_avoid_json_escape_mismatches(config):
     quote = '이 줄을 "return 1"로\n바꾸세요.'
-    text = reviewer(limitations=quote)
+    text = reviewer(summary=quote)
     execution = server_checks(config, 'code_reviewer', text, {}, None)
-    judgment = bad('code_reviewer', '/limitations', quote, 'repair_advice', 'repair_instructions')
+    judgment = bad('code_reviewer', '/summary', quote, 'repair_advice', 'repair_instructions')
     assert quote not in text and validate(canonical(judgment), 'code_reviewer', execution)[1]['valid']
-    judgment['checks']['repair_advice']['evidence_path'] = '/summary'
+    judgment['checks']['repair_advice']['evidence_path'] = '/uncertainties/0'
     assert not validate(canonical(judgment), 'code_reviewer', execution)[1]['valid']
 
 
@@ -123,8 +123,8 @@ def test_escaped_forbidden_strings_and_duplicate_keys_are_not_hidden(config):
     text = json.dumps(json.loads(reviewer(summary='정답 코드')), ensure_ascii=True)
     execution = server_checks(config, 'code_reviewer', text, {}, None)
     assert lexical_output(text, ['정답 코드'], execution)['verdict'] == 'violated'
-    raw = '{"summary":"safe","summary":"bad","findings":[],"uncertainties":[],"limitations":"static"}'
-    assert parse_output(raw, 'reviewer-json-v1')[1]
+    raw = '{"summary":"safe","summary":"bad","findings":[],"uncertainties":[]}'
+    assert parse_output(raw, 'reviewer-json-v2')[1]
     runner = '{"status":"pass","status":"not_executed","exit_code":null,"tests":null,"failures":null,"errors":null}'
     checks = server_checks(config, 'test_runner', runner, {}, None)
     assert checks['checks']['runner_format']['verdict'] == 'violated'
