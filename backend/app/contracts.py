@@ -133,6 +133,7 @@ class RunCreate(ExecutionSettings):
 
 class BatchCreate(ExecutionSettings):
     mode: Literal['L1', 'L1+L2', 'FULL'] = 'L1'
+    candidate_label: Literal['correct', 'incorrect'] = 'correct'
     budget: Budget = Field(default_factory=lambda: Budget(max_requests=1000))
     evaluate_l1: bool = True
 

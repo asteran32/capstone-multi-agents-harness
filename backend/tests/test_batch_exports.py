@@ -56,9 +56,9 @@ def test_export_partial_batch_preserves_order_phase_and_scope(database, mode):
     with db.transaction() as s:
         before = s.scalar(select(func.count()).select_from(db.ModelRequest))
     rows = download(c, batch)
-    assert len(rows) == 90
+    assert len(rows) == 300
     assert [(r['source_task_id'], r['round_index'], r['role']) for r in rows] == [
-        (f'HumanEval/{i}', '1', role) for i in range(30) for role in ROLES]
+        (f'HumanEval/{i}', '1', role) for i in range(100) for role in ROLES]
     assert {r['batch_id'] for r in rows} == {batch['id']}
     assert not {r['run_id'] for r in rows} & {item['run_id'] for item in other['items']}
     assert {r['batch_status'] for r in rows} == {'running'}
@@ -126,8 +126,8 @@ def test_cancelled_batch_export_keeps_all_rounds_and_empty_results(database):
     batch = create(c, rounds=2)
     c.post(f"/api/batches/{batch['id']}/cancel")
     rows = download(c, batch)
-    assert len(rows) == 180
-    assert len({r['call_id'] for r in rows}) == 180
+    assert len(rows) == 600
+    assert len({r['call_id'] for r in rows}) == 600
     assert {r['batch_status'] for r in rows} == {'cancelled'}
     assert {r['call_status'] for r in rows} == {'cancelled'}
     assert rows[3]['round_index'] == '2' and rows[6]['source_task_id'] == 'HumanEval/1'

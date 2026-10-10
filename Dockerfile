@@ -13,6 +13,7 @@ COPY backend/ ./backend/
 COPY data/ ./data/
 COPY policies/ ./policies/
 COPY scripts/ ./scripts/
+COPY sandbox/runner.py ./sandbox/runner.py
 COPY --from=frontend /web/dist ./frontend/dist
 ENV PYTHONPATH=/workspace/backend PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /workspace/backend

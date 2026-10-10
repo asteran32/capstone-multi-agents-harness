@@ -92,7 +92,7 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     command.upgrade(Config(str(Path(__file__).resolve().parents[1]/'alembic.ini')), 'head')
     with db.transaction() as s:
         assert s.get(db.Batch, batch_id).analysis_settings == {}
-        assert len(s.get(db.Batch, batch_id).manifest) == 30
+        assert len(s.get(db.Batch, batch_id).manifest) == 100
     with postgres_checkpointer() as saver:
         agent, offline = graphs.agent_graph(saver), graphs.offline_graph(saver)
         for index, kind in [(0, 'run'), (0, 'offline'), (1, 'run')]:
@@ -125,7 +125,7 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     client.auth = ('researcher', 'test-password')
     analytics = client.get(f'/api/batches/{batch_id}/analytics')
     assert analytics.status_code == 200, analytics.text
-    assert analytics.json()['progress']['planned'] == 90
+    assert analytics.json()['progress']['planned'] == 300
     assert analytics.json()['threshold']['warmup'] == 3
     assert analytics.json()['judge']['schema_checks'] == 3
     updated = client.put(f'/api/batches/{batch_id}/analysis-settings', json={'revision': 0, 'm4_threshold': .2})
@@ -133,7 +133,7 @@ def test_postgres_migration_checkpoint_and_restart(monkeypatch):
     exported = client.get(f'/api/batches/{batch_id}/results.csv')
     assert exported.status_code == 200, exported.text
     rows = list(csv.DictReader(io.StringIO(exported.content.decode('utf-8-sig'))))
-    assert len(rows) == 90
+    assert len(rows) == 300
     assert {r['batch_status'] for r in rows} == {'cancelled'}
     assert rows[0]['evaluation_phase'] == 'offline' and rows[0]['initial_verdict'] == 'compliant'
     assert rows[0]['agent_total_tokens'] == rows[0]['judge_total_tokens'] == '0'

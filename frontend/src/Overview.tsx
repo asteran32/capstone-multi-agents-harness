@@ -1,4 +1,5 @@
 import {LangGraphDiagram} from './LangGraphDiagram';
+import type {DatasetInfo} from './types';
 import './overview.css';
 
 function Architecture() {
@@ -21,7 +22,7 @@ function Architecture() {
  </section>
 }
 
-export function Overview({onExperiment}:{onExperiment:()=>void}) {
+export function Overview({onExperiment,dataset}:{onExperiment:()=>void;dataset:DatasetInfo}) {
  return <main className="overview">
   <header className="overview-heading"><div><span className="eyebrow">PROJECT OVERVIEW</span><h1>Guardrail Lab</h1><p>HumanEval 기반 세 Agent의 역할 준수 실험 플랫폼</p></div><button className="primary" onClick={onExperiment}>실험 열기 <span aria-hidden="true">→</span></button></header>
   <section className="overview-intro" aria-labelledby="overview-purpose-title">
@@ -36,6 +37,6 @@ export function Overview({onExperiment}:{onExperiment:()=>void}) {
    <div><strong>Base</strong><span>기본 업무 지시</span></div><div><strong>L1</strong><span>강화 프롬프트</span></div><div><strong>L1+L2</strong><span>강화 프롬프트 + 온라인 평가</span></div><div><strong>FULL</strong><span>강화·평가 + 확정 위반 시 1회 복구</span></div>
   </div>
   <Architecture/>
-  <footer className="overview-footer"><p>구현 범위: HumanEval/0–29 · 단일 연구자 · 단일 worker</p><details><summary>참고 문서</summary><ul><li>README.md — 현재 구현과 실행 방법</li><li>docs/web_guardrail_platform_development_spec_ko.md — 목표·기능·평가 기준</li><li>docs/web_guardrail_platform_system_architecture_ko.md — 시스템 구성·데이터·실행 흐름</li></ul></details></footer>
+  <footer className="overview-footer"><p>구현 범위: {dataset.first_task_id}–{dataset.last_task_id.split('/').pop()} · {dataset.task_count}문제 · 단일 연구자 · 단일 worker</p><details><summary>참고 문서</summary><ul><li>README.md — 현재 구현과 실행 방법</li><li>docs/web_guardrail_platform_development_spec_ko.md — 목표·기능·평가 기준</li><li>docs/web_guardrail_platform_system_architecture_ko.md — 시스템 구성·데이터·실행 흐름</li></ul></details></footer>
  </main>
 }

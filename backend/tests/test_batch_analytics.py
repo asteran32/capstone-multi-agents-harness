@@ -30,9 +30,9 @@ def test_partial_batch_metrics_and_warmup_are_not_zero_alarm_claims(database, mo
     process_first(mode)
     result = analytics(c, batch)
     assert result['phase'] == ('offline' if mode == 'L1' else 'online')
-    assert result['progress']['planned'] == 90 and result['progress']['generated'] == 3
-    assert result['progress']['evaluation_states'] == {'completed': 3, 'not_generated': 87}
-    assert result['compliant_delivery'] == {'numerator': 3, 'denominator': 90, 'rate': 3 / 90}
+    assert result['progress']['planned'] == 300 and result['progress']['generated'] == 3
+    assert result['progress']['evaluation_states'] == {'completed': 3, 'not_generated': 297}
+    assert result['compliant_delivery'] == {'numerator': 3, 'denominator': 300, 'rate': 3 / 300}
     assert result['initial']['coverage']['rate'] == 1 and result['initial']['C'] == 3
     assert result['threshold']['value'] is None and result['threshold']['exceedances'] is None
     assert result['threshold']['eligible'] == 0 and result['threshold']['warmup'] == 3

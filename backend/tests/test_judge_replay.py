@@ -20,7 +20,7 @@ from test_reevaluation import fixed_batch, prepare, history_fingerprint
 
 
 def preview(c, review, **settings):
-    body = {'judge_model': 'mock', 'budget': {'max_requests': 360}, **settings}
+    body = {'judge_model': 'mock', 'budget': {'max_requests': 1200}, **settings}
     response = c.post(f"/api/review-sets/{review['id']}/replay-preview", json=body)
     assert response.status_code == 200, response.text
     return body, response.json()
@@ -33,7 +33,7 @@ def start(c, review, settings, prepared, key='replay'):
     return response.json()
 
 
-def test_ninety_stored_outputs_only_judge_calls_and_source_unchanged(database, monkeypatch):
+def test_three_hundred_stored_outputs_only_judge_calls_and_source_unchanged(database, monkeypatch):
     c = client(); batch = create(c, 'FULL')
     agent, offline = graphs()
     while job := claim():
@@ -41,13 +41,13 @@ def test_ninety_stored_outputs_only_judge_calls_and_source_unchanged(database, m
     before = history_fingerprint()
     original_summary = c.get(f"/api/batches/{batch['id']}").json()
     review = prepare(c, batch, mode='judge_replay')
-    assert review['status'] == 'ready' and review['total'] == review['stored'] == 90
+    assert review['status'] == 'ready' and review['total'] == review['stored'] == 300
     assert review['synthetic'] == review['reviewed'] == 0
-    assert review['roles'] == {role: 30 for role in ROLES} and review['versions'] == {'0': 90}
+    assert review['roles'] == {role: 100 for role in ROLES} and review['versions'] == {'0': 300}
     assert all(case['label'] == {'status': 'unreviewed'} for case in review['cases'])
     assert prepare(c, batch, mode='judge_replay')['id'] == review['id']
     settings, prepared = preview(c, review)
-    assert prepared['base_requests'] == 90 and prepared['max_requests'] == 360
+    assert prepared['base_requests'] == 300 and prepared['max_requests'] == 1200
     assert not prepared['config_snapshot']['policy_changed']
     with db.transaction() as s:
         assert s.scalar(select(func.count()).select_from(db.ReevaluationRequest)) == 0
@@ -71,21 +71,21 @@ def test_ninety_stored_outputs_only_judge_calls_and_source_unchanged(database, m
     # Any graph invocation would fail: this job must exclusively use the Judge worker.
     process_job(claim(), None, None)
     result = c.get(f"/api/reevaluations/{run['id']}").json()
-    assert result['status'] == 'completed' and result['finished'] == result['requests'] == 90
+    assert result['status'] == 'completed' and result['finished'] == result['requests'] == 300
     assert result['errors'] == 0 and set(seen) == set(sources)
     assert result['labels_snapshot'] == {}
-    assert result['usage'] == dict(input_tokens=0, output_tokens=0, total_tokens=0, reported_requests=90, total_requests=90)
+    assert result['usage'] == dict(input_tokens=0, output_tokens=0, total_tokens=0, reported_requests=300, total_requests=300)
     metrics = result['metrics']
-    assert metrics['total'] == 90 and metrics['mode'] == 'judge_replay'
-    assert all(metrics['roles'][role]['total'] == 30 for role in ROLES)
-    assert metrics['judge']['new']['compliant'] == 90
+    assert metrics['total'] == 300 and metrics['mode'] == 'judge_replay'
+    assert all(metrics['roles'][role]['total'] == 100 for role in ROLES)
+    assert metrics['judge']['new']['compliant'] == 300
     assert 'fpr' not in json.dumps(metrics) and 'recall' not in json.dumps(metrics)
     assert not metrics['promotion']['ready']
     assert history_fingerprint() == before
     assert c.get(f"/api/batches/{batch['id']}").json() == original_summary
     exported = c.get(f"/api/reevaluations/{run['id']}/results.csv")
     rows = list(csv.DictReader(io.StringIO(exported.content.decode('utf-8-sig'))))
-    assert len(rows) == 90 and all(row['expected'] == row['reviewer'] == '' for row in rows)
+    assert len(rows) == 300 and all(row['expected'] == row['reviewer'] == '' for row in rows)
     assert all(row['mode'] == 'judge_replay' and row['new_judge_verdict'] == 'compliant' for row in rows)
     assert {row['response_sha256'] for row in rows} == {source['response_sha256'] for source in sources.values()}
     audit = c.get(f"/api/reevaluations/{run['id']}/cases/{review['cases'][0]['id']}").json()

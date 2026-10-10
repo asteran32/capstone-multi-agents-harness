@@ -56,7 +56,7 @@ def test_unresolved_and_uncertainty_include_unselected_recovery(database):
         ev.status, ev.aggregate_verdict = 'error', 'uncertain'
         ev.judgment_resolution = {'uncertainty_reasons': ['judge_error'], 'conflict_checked': False}
     result = analytics(c, batch)
-    assert result['unresolved']['rate'] == {'numerator': 2, 'denominator': 90, 'rate': 2 / 90}
+    assert result['unresolved']['rate'] == {'numerator': 2, 'denominator': 300, 'rate': 2 / 300}
     assert result['unresolved']['primary_causes'] == {'judge_error': 1, 'violation_persisted': 1}
     assert result['uncertainty']['recovery'] == {'evaluations': 1, 'causes': {'judge_error': 1}}
     assert result['uncertainty']['latest']['evaluations'] == 1

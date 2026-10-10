@@ -70,7 +70,7 @@ def test_batch_freezes_one_file_revision_for_all_thirty_runs(database, judge_fil
     with db.transaction() as s:
         batch = create_batch(s, BatchCreate(prompts_by_role={r: 'request' for r in ROLES}), 'yaml-batch')
         runs = list(s.scalars(select(db.Run).where(db.Run.id.in_([i['run_id'] for i in batch.manifest]))))
-        assert len(runs) == 30 and len(reads) == 1
+        assert len(runs) == 100 and len(reads) == 1
         assert len({r.config_snapshot['evaluation_version'] for r in runs}) == 1
         assert all(r.config_snapshot['evaluation_profile']['common_rubric'] == document['structured_evaluation']['common_rubric'] for r in runs)
 

@@ -15,19 +15,23 @@ def limits():
     resource.setrlimit(resource.RLIMIT_CPU, (8, 9))
 
 
+def test_program(payload):
+    # HumanEval tests share the candidate's globals, including prompt helpers.
+    # Keep both source strings unchanged, as in the upstream evaluation harness.
+    return (payload['code'] + '\n' + payload['test'] +
+            '\n\ndef test_original_humaneval():\n    check(' + payload['entry_point'] + ')\n')
+
+
 def main():
     payload = json.loads(base64.b64decode(sys.argv[1]))
     work = Path('/tmp/work')
     work.mkdir()
     (work / 'candidate.py').write_text(payload['code'])
-    # The original test is unchanged; the added pytest wrapper calls check(function).
-    wrapper = ("from candidate import " + payload['entry_point'] + "\n" + payload['test'] +
-               "\n\ndef test_original_humaneval():\n    check(" + payload['entry_point'] + ")\n")
-    (work / 'test_original.py').write_text(wrapper)
+    (work / 'test_original.py').write_text(test_program(payload))
     result = {'status': 'error', 'exit_code': None, 'tests': None, 'failures': None, 'errors': None}
     with (work / 'stdout').open('wb') as stdout, (work / 'stderr').open('wb') as stderr:
         process = subprocess.Popen([sys.executable, '-m', 'pytest', '-q', '-p', 'no:cacheprovider',
-                                    '--junitxml=result.xml', 'test_original.py'], cwd=work,
+                                    '--junitxml=result.xml', 'test_original.py::test_original_humaneval'], cwd=work,
                                    stdout=stdout, stderr=stderr, start_new_session=True, preexec_fn=limits,
                                    env={'PATH': '/usr/local/bin:/usr/bin:/bin', 'PYTHONDONTWRITEBYTECODE': '1',
                                         'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'})

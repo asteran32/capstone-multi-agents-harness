@@ -6,6 +6,7 @@ export type ExperimentMode = Exclude<Mode, 'Base'>;
 export type EvaluationPhase = 'online' | 'offline';
 export type ModelType = 'mock' | 'live';
 export type Dict = Record<string, any>;
+export interface DatasetInfo {task_count:number; candidate_count:number; first_task_id:string; last_task_id:string; source_version:string}
 export interface Task { id: string; source_task_id: string; prompt: string; entry_point: string }
 export interface Candidate {id: string; private_label: string; code: string; code_sha256: string}
 export interface Run {id:string; mode:Mode; model_type:ModelType; status:string; created_at:string; total_calls:number; finished_calls:number; failed_calls:number; config_snapshot:Dict; jobs:Dict[]; error:Dict|null}

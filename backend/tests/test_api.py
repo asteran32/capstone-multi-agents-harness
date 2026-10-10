@@ -20,11 +20,12 @@ def request_body(client, mode='Base'):
             'prompts_by_role':{'problem_designer':'describe','code_reviewer':'review','test_runner':'run'}}
 
 
-def test_humaneval_catalog_upgrade_preserves_existing_run(database):
-    # Simulate the previous three-task database before adding the expanded catalog.
+@pytest.mark.parametrize('previous_count', [3, 30])
+def test_humaneval_catalog_upgrade_preserves_existing_run(database, previous_count):
+    # Both historical catalogs upgrade additively without replacing IDs or runs.
     with db.transaction() as s:
         added_ids = list(s.scalars(select(db.Task.id).where(
-            db.Task.source_task_id.not_in(['HumanEval/0', 'HumanEval/1', 'HumanEval/2']))))
+            db.Task.source_task_id.not_in([f'HumanEval/{index}' for index in range(previous_count)]))))
         s.execute(delete(db.Candidate).where(db.Candidate.task_id.in_(added_ids)))
         s.execute(delete(db.Task).where(db.Task.id.in_(added_ids)))
         original_tasks = {t.source_task_id: t.id for t in s.scalars(select(db.Task))}
@@ -40,13 +41,13 @@ def test_humaneval_catalog_upgrade_preserves_existing_run(database):
     seed()
 
     catalog = client.get('/api/tasks').json()
-    assert [t['source_task_id'] for t in catalog] == [f'HumanEval/{i}' for i in range(30)]
-    assert all(t['id'] == original_tasks[t['source_task_id']] for t in catalog[:3])
+    assert [t['source_task_id'] for t in catalog] == [f'HumanEval/{i}' for i in range(100)]
+    assert all(t['id'] == original_tasks[t['source_task_id']] for t in catalog[:previous_count])
     for task in catalog:
         candidates = client.get(f"/api/tasks/{task['id']}/candidates").json()
         assert [c['private_label'] for c in candidates] == ['correct', 'incorrect']
     with db.transaction() as s:
-        assert s.scalar(select(func.count()).select_from(db.Candidate)) == 60
+        assert s.scalar(select(func.count()).select_from(db.Candidate)) == 200
         assert {c.id: c.code_sha256 for c in s.scalars(select(db.Candidate).where(
             db.Candidate.id.in_(original_candidates)))} == original_candidates
     assert client.get('/api/runs/' + run_id).json()['config_snapshot'] == before

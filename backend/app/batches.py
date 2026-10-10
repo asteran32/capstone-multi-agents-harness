@@ -4,6 +4,7 @@ from collections import Counter
 from sqlalchemy import select, func, case
 from .contracts import BatchCreate, RunCreate, TERMINAL, digest
 from .db import Batch, Task, Candidate, Run, Call, Job, Evaluation, Response, now, uid
+from .dataset import dataset_task_ids
 from .services import Conflict, DEFAULT_POLICY, create_run
 
 JOB_TERMINAL = ('completed', 'failed', 'cancelled')
@@ -21,6 +22,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
         return existing
 
     selected = []
+    candidate_name = '정답 후보' if body.candidate_label == 'correct' else '오답 후보'
     if source:
         for item in source.manifest:
             task, candidate = s.get(Task, item['task_id']), s.get(Candidate, item['candidate_id'])
@@ -30,24 +32,25 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
                 raise ValueError('원본 일괄 실행의 문제 또는 후보가 변경되었습니다.')
             selected.append((task, candidate))
     else:
-        expected = [f'HumanEval/{i}' for i in range(30)]
+        expected = dataset_task_ids()
         tasks = {t.source_task_id: t for t in s.scalars(select(Task).where(Task.source_task_id.in_(expected)))}
         for source_id in expected:
             task = tasks.get(source_id)
             if not task:
-                raise ValueError(f'{source_id}가 없습니다. 30문제 seed를 먼저 실행하세요.')
+                raise ValueError(f'{source_id}가 없습니다. {len(expected)}문제 seed를 먼저 실행하세요.')
             candidates = list(s.scalars(select(Candidate).where(Candidate.task_id == task.id,
-                                                               Candidate.private_label == 'correct')))
+                                                               Candidate.private_label == body.candidate_label)))
             if len(candidates) != 1:
-                raise ValueError(f'{source_id}의 정답 후보가 정확히 1개 있어야 합니다.')
+                raise ValueError(f'{source_id}의 {candidate_name}가 정확히 1개 있어야 합니다.')
             selected.append((task, candidates[0]))
-    if len(selected) != 30:
-        raise ValueError('일괄 실행에는 정확히 30문제가 필요합니다.')
+    # Historical batches retain their original manifest, including 30-task batches.
+    if not selected or len({task.id for task, _ in selected}) != len(selected):
+        raise ValueError('일괄 실행에는 중복되지 않은 문제가 필요합니다.')
     for task, candidate in selected:
-        if (candidate.task_id != task.id or candidate.private_label != 'correct'
+        if (candidate.task_id != task.id or candidate.private_label != body.candidate_label
                 or digest(candidate.code) != candidate.code_sha256
                 or digest(task.source_record) != task.source_sha256):
-            raise ValueError('문제·정답 후보의 연결 또는 해시가 일치하지 않습니다.')
+            raise ValueError(f'문제·{candidate_name}의 연결 또는 해시가 일치하지 않습니다.')
 
     config = body.model_dump(mode='json')
     config['policy_raw'] = body.policy_raw if body.policy_raw is not None else DEFAULT_POLICY.read_text()
@@ -60,11 +63,11 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
     manifest, previous_key = [], None
     frozen_evaluator = evaluation_config
     for index, (task, candidate) in enumerate(selected, 1):
-        run_body = RunCreate(**{k: v for k, v in config.items() if k != 'evaluate_l1'},
+        run_body = RunCreate(**{k: v for k, v in config.items() if k not in ('evaluate_l1', 'candidate_label')},
                              task_id=task.id, candidate_id=candidate.id)
         run = create_run(s, run_body, f'batch:{batch.id}:{index}', frozen_evaluator, recovery_strategy)
         if frozen_evaluator is None:
-            # All 30 runs share one evaluator even if judge.yaml changes during creation.
+            # All runs share one evaluator even if judge.yaml changes during creation.
             frozen_evaluator = run.config_snapshot
         run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index}
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run'))

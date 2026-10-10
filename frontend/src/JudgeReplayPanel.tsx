@@ -20,7 +20,7 @@ function Judgment({value}:{value:Dict|undefined}) {
 export function JudgeReplayPanel({batch,config,onInspect,onError}:{batch:Batch;config:Dict;onInspect:(id:string,callId?:string)=>void;onError:(message:string)=>void}) {
  const [open,setOpen]=useState(false),[sets,setSets]=useState<Dict[]>([]),[setId,setSetId]=useState(''),[review,setReview]=useState<Dict|null>(null);
  const [model,setModel]=useState(batch.config_snapshot.judge_model),[policySource,setPolicySource]=useState('original');
- const [budget,setBudget]=useState(360),[tokens,setTokens]=useState(batch.config_snapshot.budget?.max_output_tokens||1500);
+ const [budget,setBudget]=useState(Math.min(2000,batch.total_runs*batch.config_snapshot.rounds*3*4)),[tokens,setTokens]=useState(batch.config_snapshot.budget?.max_output_tokens||1500);
  const [preview,setPreview]=useState<Dict|null>(null),[executionId,setExecutionId]=useState(''),[execution,setExecution]=useState<Dict|null>(null);
  const [caseId,setCaseId]=useState(''),[filter,setFilter]=useState('all'),[role,setRole]=useState('all');
  const [busy,setBusy]=useState(false),[reload,setReload]=useState(0),[showAudit,setShowAudit]=useState(false),[audit,setAudit]=useState<Dict|null>(null);

@@ -21,6 +21,7 @@ from .services import create_run, Conflict, DEFAULT_POLICY
 from .batches import create_batch, batch_summary, cancel_batch
 from .exports import batch_results_csv
 from .batch_analytics import batch_analytics, analysis_settings
+from .dataset import dataset_info
 
 app = FastAPI(title='Guardrail Lab', version='0.1.0', docs_url=None, redoc_url=None, openapi_url=None)
 basic = HTTPBasic(auto_error=False)
@@ -87,7 +88,8 @@ def ready():
 def config():
     raw = DEFAULT_POLICY.read_text()
     return {'models': ['mock', *settings.live_models], 'policy_raw': raw,
-            'policy': parse_policy(raw).model_dump(), 'sandbox_mode': settings.sandbox_mode}
+            'policy': parse_policy(raw).model_dump(), 'sandbox_mode': settings.sandbox_mode,
+            'dataset': dataset_info()}
 
 
 class PolicyInput(BaseModel):
