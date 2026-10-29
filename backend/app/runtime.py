@@ -5,6 +5,7 @@ from .config import settings
 from .contracts import canonical
 from .db import (transaction, Call, Run, ModelRequest, ToolExecution, Job, Snapshot, Evaluation, Response)
 from .providers import respond, ProviderError
+from .prompt_caching import batch_cached_payload
 from .services import log
 
 
@@ -58,6 +59,7 @@ def model_operation(call_id, snapshot_id, operation_key, payload, context, evalu
             if row.status == 'running':
                 row.status = 'unknown'
                 row.error = {'code': 'unknown_after_restart', 'duplicate_provider_call_possible': True}
+    payload = batch_cached_payload(payload, config, context['kind'])
     if len(canonical(payload).encode()) > config['budget']['max_input_bytes']:
         raise BudgetExceeded('context_limit: 입력을 삭제하거나 요약하지 않았습니다.')
     for attempt in range(start + 1, config['transport_attempts'] + 1):

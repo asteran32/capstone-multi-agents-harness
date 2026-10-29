@@ -93,6 +93,10 @@ API는 `POST /api/live/sessions`, `GET /api/live/sessions/{id}`, `POST /api/live
 
 실행 순서는 서버 DB에 저장되므로 브라우저를 닫아도 계속됩니다. 기존 단일 worker가 처리하며, 한 문제에서 오류가 발생하면 기록한 뒤 다음 문제로 진행합니다. **남은 실행 취소**는 대기 작업을 취소하고 진행 중인 모델·도구 요청이 반환된 다음 중지합니다. 취소한 일괄 실행은 새 실행으로 다시 시작합니다. 동일 접수 요청의 재전송은 같은 idempotency key를 사용하는 경우 중복 Run을 만들지 않습니다.
 
+새 일괄 실험은 `batch_prompt_cache.version: fixed-prefix-v1`을 배치와 각 Run 설정에 기록합니다. GPT-5.6 이상 모델의 Agent·Judge 요청에서는 기존 사용자 JSON의 공통 역할·요청·정책·평가 기준을 앞에 두고, 그 끝의 명시적 breakpoint만 캐시에 기록합니다(`mode: explicit`, `ttl: 30m`). 문제·응답·이력·복구 피드백은 뒤에 이어지며 JSON 필드 경로와 값, 역할 지침, 동적 few-shot, 출력 스키마, 도구 호출 및 요청 예산은 보존합니다. L1 사후 평가와 Decisions Judge도 이 배치 전송 경로를 사용합니다. Live·단일 실험·이 설정이 없는 기존 배치 재개·지원되지 않는 모델은 기존 전송 형식을 유지합니다. 새 배치로 재실행하면 새 캐시 설정을 사용합니다.
+
+캐시 적중은 동일한 prefix와 최소 길이 등 OpenAI 조건에 따르며 보장되지 않습니다. 짧은 프롬프트를 임의로 늘리거나 사전 준비용 모델 호출을 추가하지 않습니다. 캐시 메타데이터로 입력 byte 예산을 넘으면 해당 요청은 기존 형식으로 보냅니다. 실제 전송한 payload와 API의 `usage.input_tokens_details.cached_tokens`, `cache_write_tokens`는 요청 기록에 저장되므로 읽기·쓰기 비용을 함께 비교할 수 있습니다. `store: false`는 유지합니다. [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
+
 각 배치는 빈 이력에서 시작합니다. HumanEval/0의 첫 Round는 세 역할 모두 `history: []`이며, 이후에는 같은 배치의 앞선 문제·Round에서 **자기 역할의 최신 준수 출력 1개**만 전달합니다. 준수 출력이 아직 없으면 계속 비워 두고, 이후 위반·불확실이 발생해도 이전 준수 출력은 유지합니다. 다른 역할·다른 배치·재실행 원본 배치의 출력은 가져오지 않습니다. 단독 Run에서는 같은 Run의 이전 Round만 검색합니다.
 
 이력 채택 조건은 완료된 호출의 **최종 선택 응답**, 현재 실행과 같은 평가 버전, 유효한 schema/evidence 검증, 최종 종합 판정 `compliant`입니다. 평가기 v3는 서버·Judge의 최종 적용 기준이 모두 준수인 `history_eligible`을 요구하며, 구형 평가기는 원래 Judge INFO/SCOPE/EXEC 모두 준수 조건을 유지합니다. L3 복구가 준수로 완료되면 복구 출력만 채택하고 최초 위반 출력은 제외합니다. 이력에는 `raw_text`와 출처 문제·call·response·evaluation ID 및 응답 버전만 포함합니다. 과거 문제·코드 입력, 사용자 요청, 다른 역할 출력, Judge 설명, 도구 결과는 첨부하지 않습니다. Runner는 과거 성공 보고를 현재 테스트의 실행 근거로 사용하지 않습니다.

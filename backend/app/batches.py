@@ -6,6 +6,7 @@ from .contracts import BatchCreate, RunCreate, TERMINAL, digest
 from .db import Batch, Task, Candidate, Run, Call, Job, Evaluation, Response, now, uid
 from .dataset import dataset_task_ids
 from .services import Conflict, DEFAULT_POLICY, create_run
+from .prompt_caching import BATCH_PROMPT_CACHE
 
 JOB_TERMINAL = ('completed', 'failed', 'cancelled')
 
@@ -56,6 +57,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
             raise ValueError(f'문제·{candidate_name}의 연결 또는 해시가 일치하지 않습니다.')
 
     config = body.model_dump(mode='json')
+    config['batch_prompt_cache'] = dict(BATCH_PROMPT_CACHE)
     config['policy_raw'] = body.policy_raw if body.policy_raw is not None else DEFAULT_POLICY.read_text()
     batch = Batch(id=uid(), idempotency_key=key, creation_request_sha256=request_hash,
                   config_snapshot=config, manifest=[], source_batch_id=source.id if source else None,
@@ -68,7 +70,7 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
     frozen_examples = few_shot_snapshot if few_shot_snapshot is not None else (
         source.config_snapshot.get('few_shot_snapshot') if source else None)
     for index, (task, candidate) in enumerate(selected, 1):
-        run_body = RunCreate(**{k: v for k, v in config.items() if k not in ('evaluate_l1', 'candidate_label')},
+        run_body = RunCreate(**{k: v for k, v in config.items() if k in RunCreate.model_fields},
                              task_id=task.id, candidate_id=candidate.id)
         run = create_run(s, run_body, f'batch:{batch.id}:{index}', frozen_evaluator, recovery_strategy,
                          few_shot_snapshot=frozen_examples)
@@ -77,7 +79,8 @@ def create_batch(s, body: BatchCreate, key: str, source: Batch | None = None, ev
             frozen_evaluator = run.config_snapshot
         if frozen_examples is None:
             frozen_examples = run.config_snapshot['few_shot_snapshot']
-        run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index}
+        run.config_snapshot = {**run.config_snapshot, 'batch_id': batch.id, 'batch_index': index,
+                               'batch_prompt_cache': dict(config['batch_prompt_cache'])}
         job = s.scalar(select(Job).where(Job.run_id == run.id, Job.job_type == 'run'))
         job.payload = {**job.payload, 'batch_id': batch.id, 'depends_on_key': previous_key}
         previous_key = job.job_key
