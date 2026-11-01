@@ -1,346 +1,157 @@
 # Guardrail Lab
 
-HumanEval 문제에서 Problem designer → Code reviewer → Test runner를 순차 실행하고, 네 가지 Guardrail 모드의 출력과 판정 근거를 조회하는 harness engineering 실험용 웹 데모입니다. [개발 명세](docs/web_guardrail_platform_development_spec_ko.md)와 [시스템 아키텍처](docs/web_guardrail_platform_system_architecture_ko.md)를 기준으로 구현했습니다.
+다중 에이전트 코딩 교육 시스템의 역할 일관성을 위한 3계층 가드레일 실행·평가 플랫폼.
 
-연구는 역할·도구·출력 계약 준수, 위반 탐지, 복구, 실행 신뢰성과 토큰·지연 비용에 집중합니다. HumanEval은 통제된 작업 입력이며 교육적 위험과 학습 효과는 평가 범위에서 제외합니다. 비교 조건, 독립 평가와 장애 검증 계획은 [Harness Engineering 실험 계획서](docs/web_guardrail_platform_experiment_plan_ko.md)에 정리했습니다. 이 계획의 분석 도구와 장애 fixture가 모두 구현된 것은 아닙니다.
+## Abstract
 
-본실험은 **L1 / L1+L2 / FULL** 세 조건을 사용합니다. L1의 역할·요구사항·금지사항·출력 명세를 공통 기준선으로 두고 온라인 평가와 복구의 추가 효과를 비교합니다. Base는 앱에서 지원하지만 본실험에서는 제외합니다. L1의 저장 응답도 사후 평가하며, L1 명세 자체의 효과는 이번 비교로 추정하지 않습니다.
+Guardrail Lab은 Problem Designer, Code Reviewer, Test Runner의 역할 경계를 명세하고, 응답과 실행 증거를 검증하며, 확인된 위반을 피드백으로 복구하는 실험용 웹 플랫폼이다. L1은 상세 역할 명세와 고정 few-shot 예시, L2는 출력·실행 계약 검사와 LLM Judge 평가, L3는 피드백 기반 재생성과 재검증을 연결한다. SI(Self-improvement)는 검증된 복구 사례를 후속 과제의 동적 few-shot 예시로 재사용하는 기능이다. 과거 경험은 외부 저장소와 후속 입력을 통해 전달하며, 실행 중 모델 가중치와 역할 명세는 변경하지 않는다.
 
-FastAPI는 실행 접수·조회, 독립 Python worker는 LangGraph 실행을 담당합니다. PostgreSQL의 `app` schema에 실험 기록을, `checkpoint` schema에 재개 상태를 저장합니다. React 화면은 같은 FastAPI 주소에서 제공합니다. Redis, Celery, 사용자 관리, 자동 모델 선택 등 확장 기능은 포함하지 않습니다.
+HumanEval 164개 과제의 참조 구현을 공통 후보 코드로 사용해 Baseline, L1, L1+L2+L3(SI OFF), L1+L2+L3(SI ON)을 비교하였다. 네 조건을 각각 한 배치씩 실행한 묶음을 한 실험 세트로 정의하고, S01의 1,968개 계획 역할 호출과 S01을 포함한 S01–S04의 16배치·7,872개 계획 역할 호출을 분석하였다. S01의 최종 자동 준수 응답 제공률은 네 조건에서 각각 89.84%, 93.90%, 97.56%, 98.37%였다. S01–S04 통합 결과에서 Code Reviewer의 초기 자동 위반율은 SI OFF 10.97%에서 SI ON 8.96%로 낮았으며, SI ON의 기록 토큰은 9.72% 많았다.
 
-## 실행
+이 결과는 저장된 정책에 대한 자동 판정과 제한된 반복 실험의 관측이다. 경험 축적에 따른 지속적인 성능 향상, 사람 기준의 역할 침범 교정 또는 교육 효과를 입증하는 결과로 해석하지 않는다. 본 문서의 연구 설명과 그림은 `docs/final3/v5_ko.md`를 기준으로 정리하였다.
 
-Docker Desktop 또는 Docker Engine과 Compose가 필요합니다. Docker를 켠 뒤 저장소 루트에서 실행하세요. 최초 설정을 생성할 때는 Python 3도 필요합니다.
+## 워크플로우
+
+### 시스템 구성
+
+React 화면과 FastAPI 서버가 실험 설정·접수·결과 조회를 담당하고, 독립 Python worker가 LangGraph로 역할 호출·평가·복구를 수행한다. PostgreSQL의 `app` 스키마에는 실험 기록과 작업 큐를, `checkpoint` 스키마에는 그래프 재개 상태를 저장한다. 테스트는 별도의 Docker sandbox에서 실행한다.
+
+![React, FastAPI, worker, LangGraph, PostgreSQL 및 테스트 sandbox의 연결 구조](assets/readme/system_architecture.png)
+
+### 역할 실행과 검증·복구
+
+실행 단위는 **Batch → Run → Round → Call**이다. 한 Run은 하나의 문제와 고정된 후보 코드를 다루며, 각 Round에서 **Problem Designer → Code Reviewer → Test Runner** 순서로 실행한다. 이 순서는 역할의 실행 순서이며, 각 역할은 서버의 원본 자료와 자신에게 허용된 입력을 사용한다.
+
+| 역할 | 수행 업무 | 주요 경계 |
+| --- | --- | --- |
+| Problem Designer | 원본 요구사항과 함수 서명을 보존하는 문제 설명 | 정답·구현·풀이 힌트 공개 금지 |
+| Code Reviewer | 후보 코드 오류의 위치·원인·영향을 정적으로 검토 | 수정 코드·단계별 수정 방법 제공 및 코드 실행 금지 |
+| Test Runner | 고정된 후보 코드와 원본 테스트를 실행하고 결과 보고 | 코드·테스트 변경 및 실행 근거 없는 성공 주장 금지 |
+
+1. **L1 — 입력 구성:** 역할 명세, 고정 예시, 현재 문제와 같은 배치·역할의 최신 준수 응답 최대 1개를 고정한다.
+2. **응답 생성:** 허용된 도구를 사용하고 응답 원문과 실행 결과를 저장한다.
+3. **L2 — 검증:** 금지 문자열, 출력 형식, 실행 증거와 Judge의 의미 판정을 결합해 준수(C)·위반(V)·불확실(U)을 기록한다.
+4. **L3 — 복구:** FULL 모드에서 최초 응답의 확정 위반이 있으면 원본 응답과 위반 피드백으로 최대 1회 재생성하고 L2로 재검증한다. 복구가 준수이면 최종 응답으로 선택하고, 그렇지 않으면 미해결로 남긴다.
+5. **SI — 경험 재사용:** SI ON에서는 같은 배치·역할의 적격 복구 사례를 후속 Run에 동적 예시로 전달한다. SI OFF에서도 준수 응답 이력과 현재 응답의 복구는 유지된다.
+
+![L1 입력 구성부터 L2 검증, L3 복구, 후속 Run의 SI 예시 재사용까지의 흐름](assets/readme/validation_recovery.png)
+
+점선은 후속 Run으로의 복구 예시 전달을 나타낸다. 최초 판정이 U이면 복구 없이 응답을 유지하되 준수로 집계하지 않는다. Judge 판정 형식·인용 검증의 재시도는 L2 내부 절차이며, 에이전트 응답을 다시 생성하는 L3와 구분한다.
+
+## 실험 그래프
+
+아래 그래프는 HumanEval 164개 과제를 고정 순서로 실행한 결과이다. C는 자동 준수, V는 확정 위반, U는 불확실 판정이다. 초기 위반율의 분모는 최초 C+V이고, 준수 응답 제공률의 분모는 생성 실패·미해결·U를 포함한 전체 계획 호출 수이다.
+
+### 최초 응답과 복구 후 최종 응답 — S01
+
+![S01의 조건별 초기 자동 위반율과 최초·최종 준수 응답 제공률](assets/readme/outcome_comparison.png)
+
+조건별 계획 호출은 492회다. FULL의 SI OFF에서는 19건, SI ON에서는 13건이 복구 후 준수로 전환되었다. Baseline과 L1은 생성 명세·고정 예시뿐 아니라 Judge 정책 입력도 달라, 두 구성의 차이를 생성 지침만의 독립 효과로 해석하지 않는다.
+
+### 역할별 초기 위반율 — S01–S04
+
+![네 실험 세트의 역할별 초기 위반율과 Code Reviewer의 SI OFF·ON 비교](assets/readme/role_boundary_prevention.png)
+
+Code Reviewer의 초기 자동 위반율은 SI OFF 68/620(10.97%)에서 SI ON 56/625(8.96%)로 2.01%p 낮았다. 네 반복 중 세 반복에서 감소가 관측되었으며, 이 비교는 현재 Call의 복구 이전 응답을 대상으로 한다.
+
+### 초기·후반 구간의 이동 위반율(M4) — S01–S04
+
+![역할과 구성별 초기·후반 M4 및 네 배치의 개별 변화](assets/readme/m4_early_late.png)
+
+M4는 같은 배치·역할의 연속 5개 문제에서 최초 V/(C+V)로 계산한 이동 위반율이다. 초기 구간(HumanEval/0–50)과 후반 구간(HumanEval/110–163)을 비교하며, 굵은 선은 네 배치에 같은 가중치를 준 평균이다. 역할별 세로축 범위가 다르고, 두 구간의 차이는 전 구간의 지속적인 향상을 뜻하지 않는다. M4는 사후 분석 지표이며 복구 발동 조건은 현재 응답의 확정 위반이다.
+
+### 토큰 사용량 — S01–S04
+
+![FULL SI OFF와 SI ON의 Agent·Judge 입력 및 출력 토큰 사용량](assets/readme/full_guardrail_tokens.png)
+
+조건별 4배치·1,968개 계획 호출에서 기록된 총 토큰은 SI OFF 16,148,153개, SI ON 17,718,268개로 SI ON이 9.72% 많았다. 이는 Agent·Judge의 입력·출력 사용량이며, 캐시 요금이 반영된 실제 청구액은 아니다.
+
+## 프로젝트 디렉토리
+
+```text
+.
+├── assets/readme/          # README용 워크플로우·실험 그래프
+├── backend/
+│   ├── app/                # FastAPI, LangGraph, worker, 평가·복구·분석
+│   ├── migrations/         # PostgreSQL 스키마 마이그레이션
+│   ├── tests/              # 백엔드 검증
+│   └── requirements.txt    # Python 의존성
+├── frontend/
+│   ├── src/                # React 실험·배치·결과 조회 화면
+│   └── package.json        # 프런트엔드 의존성·빌드 설정
+├── policies/               # 역할 명세와 Judge 평가 정책
+├── sandbox/                # 격리 테스트 실행기와 Docker 이미지
+├── data/                   # HumanEval 164문제, 출처·해시, 라이선스
+├── docs/                   # 설계·실험 문서 및 로컬 연구 자료
+├── scripts/                # 초기 설정, 데이터 가져오기·검증
+├── .env.example            # 환경변수 예시
+├── compose.yaml            # DB, API, worker, sandbox 서비스
+├── Dockerfile              # 프런트엔드·백엔드 통합 빌드
+├── Makefile                # 실행·종료·검증 명령
+├── start.sh                # 기본 환경 시작
+└── start-experiment.sh     # 독립 실험 환경 생성·재개
+```
+
+## 실행 방법
+
+### 기본 실행
+
+Docker Desktop 또는 Docker Engine과 Compose, 최초 설정용 Python 3가 필요하다. Docker를 실행한 뒤 저장소 루트에서 다음 명령을 실행한다.
 
 ```sh
 ./start.sh
 ```
 
-스크립트는 Docker 연결과 Compose 설정을 확인하고, `.env`가 없을 때만 초기 설정을 생성합니다. 다른 폴더에서도 `bash /프로젝트/경로/start.sh`로 실행할 수 있습니다. `./start.sh --help`로 사용법을 확인하세요.
+스크립트는 `.env`가 없으면 인증 정보를 생성하고, 프런트엔드·백엔드·sandbox 이미지를 빌드한 뒤 PostgreSQL, migration·seed, API, worker, sandbox를 시작한다. 기존 `.env`와 DB 기록은 유지한다.
 
-출력된 접속 주소(기본 `http://localhost:8000`)를 열고 `.env`의 `APP_USERNAME`, `APP_PASSWORD`로 로그인합니다. 설정 스크립트는 임의 비밀번호와 내부 인증 토큰을 생성하며, 기존 `.env`는 덮어쓰지 않습니다. 첫 빌드에는 패키지와 이미지 다운로드가 필요합니다.
+브라우저에서 **http://localhost:8000**에 접속하고 `.env`의 `APP_USERNAME`, `APP_PASSWORD`로 로그인한다. 포트를 변경했다면 실행 시 출력된 주소를 사용한다. React 화면은 FastAPI에서 함께 제공되므로 별도 프런트엔드 실행이 필요 없다.
 
-`start.sh`는 테스트 실행 이미지와 프런트엔드·백엔드를 빌드하고 PostgreSQL, migration·seed, API, worker, sandbox executor를 시작합니다. 프런트엔드는 API에서 함께 제공하므로 별도 프런트엔드 실행 명령이 필요하지 않습니다. 기존 `python3 scripts/configure.py`(최초 1회)와 `make up` 방식도 사용할 수 있습니다.
+기본 Agent·Judge는 `mock`이며 모델 API 키 없이 화면과 실행 흐름을 확인할 수 있다. 테스트의 실제 실행 여부는 `.env`의 `SANDBOX_MODE`를 따른다. 기본값 `docker`는 원본 테스트를 실행하고, `mock`은 미실행으로 기록한다.
 
-로그인하면 **Overview**에서 프로젝트 개요·목적과 시스템 아키텍처를 확인할 수 있습니다. 아키텍처 그래프는 개발 명세 6절의 LangGraph 실행 흐름으로, 도구 호출·L2 평가·Judge 재시도·FULL 복구 분기를 표시합니다. 상단 메뉴는 **Overview → Live → 실험 → 일괄 실험 → 실행 기록** 순서이며, 기존 `?run=실행ID` 링크는 해당 실험 결과를 바로 엽니다.
+### 실제 모델과 일괄 실험
 
-**실험 열기** 또는 상단 **실험** 메뉴에서 문제·후보·모드를 고른 뒤 **새 실행 시작**을 누르세요. 기본 모델은 `mock`, 기본 모드는 `L1+L2`입니다.
+`.env`의 `OPENAI_API_KEY`에 키를 설정하고 `OPENAI_MODELS`에 사용할 모델 ID를 쉼표로 구분해 지정한다. 설정을 반영한 뒤 화면에서 Agent와 Judge 모델을 선택한다.
 
 ```sh
-# 상태와 로그
+docker compose up -d api worker
+```
+
+**일괄 실험**에서 정답 후보, 문제당 1 Round, Agent·Judge 모델을 선택한다. **역할별 사용자 요청 → 역할 명세 파일**에서 정책을 선택하고 다음과 같이 조건을 구성한다.
+
+| 연구 조건 | 실행 모드 | 역할 명세 파일 | 복구 사례 few-shot | 평가 |
+| --- | --- | --- | --- | --- |
+| Baseline | `L1` | `base.yaml` | OFF | 자동 사후 평가 ON |
+| L1 | `L1` | `default.yaml` | OFF | 자동 사후 평가 ON |
+| L1+L2+L3 (SI OFF) | `FULL` | `default.yaml` | OFF | 온라인 검증·복구 |
+| L1+L2+L3 (SI ON) | `FULL` | `default.yaml` | ON | 온라인 검증·복구 |
+
+연구의 Baseline은 앱의 `Base` 모드가 아니라 **`L1` 모드 + `base.yaml`** 조합이다. SI ON/OFF는 **배치 내 복구 사례를 다음 Run의 few-shot으로 적용** 체크박스로 설정한다. 앱은 온라인 검증만 수행하는 `L1+L2` 모드도 지원하지만 위 네 조건 비교에는 포함하지 않았다.
+
+**164문제 일괄 실행 시작**으로 실행하고, 배치 화면에서 진행 상태와 역할별 판정·복구 결과를 확인한다. **일괄 실행 기록 → 결과 다운로드**에서 CSV를 내려받을 수 있다. 그래프의 실험에서는 Agent·Judge 모두 `gpt-6-luna`, 문제당 1 Round, Run당 요청 상한 10회, Docker sandbox를 사용했다. 실제 모델을 선택하면 API 사용료가 발생한다.
+
+### 독립된 실험 환경
+
+조건별 DB와 실행 기록을 분리하려면 환경 이름과 포트를 지정한다.
+
+```sh
+./start-experiment.sh --name full-on --port 8011
+./start-experiment.sh --name full-off --port 8012
+
+# 종료했던 환경의 기존 기록으로 재개
+./start-experiment.sh --name full-on --resume
+```
+
+환경 이름은 실험 조건을 자동으로 설정하지 않는다. 각 접속 주소에서 모드·정책·few-shot을 선택한다. 독립 환경의 로그 확인과 종료에는 스크립트가 출력한 해당 환경 전용 명령을 사용한다.
+
+### 기본 환경 상태 확인·종료
+
+```sh
+# 서비스 상태
 docker compose ps
+
+# API·worker 로그
 docker compose logs -f api worker
 
-# 종료. 데이터 volume은 유지합니다.
-make down
+# 종료: DB 볼륨과 기록 유지
+docker compose down
 ```
-
-포트는 기본적으로 로컬 호스트에만 공개합니다. 원격 공개 시에는 인증을 유지하고 HTTPS 진입점을 구성해야 합니다.
-
-## 포함된 기능
-
-| 영역 | 구현 |
-|---|---|
-| 실행 | Base / L1 / L1+L2 / FULL, round 및 역할 순서 고정, 취소·미완료 작업 재개 |
-| L1 | 모드별 강화 프롬프트, 역할별 입력 DTO, 서버 측 도구 권한 |
-| L2 | NFKC·casefold 금지 문자열 검사, 역할별 서버 형식 검사와 의미 기준별 Judge, 필드 인용 검증·오류 피드백 재시도, INFO/SCOPE/EXEC 집계와 판정 충돌 처리 |
-| L3 | 새 FULL 실행은 최초 위반 시 검증된 history를 유지하고 원본 응답·확인된 위반을 전달하는 feedback 복구 최대 1회. reset 비교 전략은 history 제거, 기존 실행의 전략과 최초·복구 기록 보존 |
-| History | 같은 배치·같은 역할의 최신 준수 출력 최대 1개, 단독 Run은 자기 Run 안에서만 선택, 실제 입력 snapshot 고정 |
-| 지표 | 최초 응답 기준 최근 5회 M1~M4, V/C/U, coverage, warmup, null 및 disabled 구분 |
-| 사후 평가 | 종료된 Base/L1 출력만 offline 평가, 생성·도구·복구 실행 없음 |
-| 저장 응답 재평가 | 종료된 배치의 초기·복구 응답 고정, 사람의 기대 판정 검토, 합성 위반 사례, 새 평가 버전·별도 예산·결과 CSV, 검증 후 모드/Round/복구 전략 비교 |
-| 기록 | 실제 API payload, 모든 Judge 시도, 인용 검증, 도구 결과, 노드 로그 및 상세 조회 |
-| 웹 | Overview 개요·목적·아키텍처 그래프, 설정 패널, 세로 3개 역할 출력과 우측 평가, 최초·복구 전환, run 및 call 필터 |
-| Live | Easy 문제 생성, Python 코드 편집·제출, Reviewer·Runner 결과 2행, 제출 이력 및 역할별 M1~M4·준수 응답 제공률·Judge 검증 지표 |
-| 정책 | YAML/JSON 가져오기·편집·검증·파일 저장, 실행별 원문·설정·버전·해시 고정 |
-| 안정성 | 생성 멱등성, DB 작업 큐·lease·heartbeat, 단일 worker 잠금, 고유키 및 저장 결과 재사용 |
-
-OpenAI 원본 HumanEval **164문제 중 100문제(`HumanEval/0`~`HumanEval/99`)**를 포함하며, 선택 목록은 문제 번호순으로 표시합니다. 각 문제에 원본 정답 후보와 `return None` 오답 후보를 준비해 **정답 100개·오답 100개, 총 200개 후보**를 제공합니다. 문제·정답·테스트는 고정된 원본 커밋에서 그대로 가져왔으며 기존 30문제도 변경하지 않았습니다. 후보 라벨은 연구자 UI에만 표시하며 Agent·Judge 입력에는 전달하지 않습니다. 데이터 버전·원본 및 부분집합 SHA-256·후보 생성 방식은 [provenance.json](data/provenance.json), 라이선스는 [HUMANEVAL_LICENSE](data/HUMANEVAL_LICENSE)에 있습니다.
-
-기존 3문제·30문제 환경도 `./start.sh`를 다시 실행하면 이미지를 빌드하고 migration·seed 단계에서 새 문제와 두 후보를 추가합니다. 문제 원본은 `app.tasks`, 후보 코드는 `app.candidates`에 저장됩니다. 이미 등록된 문제는 건너뛰므로 재실행해도 중복되지 않으며 기존 실행 기록을 유지합니다. 새 배치는 100문제를 사용하고, 기존 30문제 배치의 조회·CSV·같은 구성 재실행은 저장된 30문제 구성을 유지합니다.
-
-부분집합을 재현하려면 provenance의 `source_url`에서 원본 압축 파일을 내려받은 뒤 `python3 scripts/import_humaneval.py /path/to/HumanEval.jsonl.gz --count 100`을 실행합니다. 가져오기는 원본 SHA-256을 검증하며 기존 문제의 수정·삭제를 거부합니다. `scripts/verify_dataset.py`는 `/data`를 읽기 전용으로 연결한 네트워크 차단 sandbox 컨테이너 안에서만 실행하며, 200개 후보가 각각 원본 테스트에 통과·실패하는지 검증합니다. 실행기는 원본 HumanEval과 같이 후보 코드와 테스트가 전역 문맥을 공유하도록 구성하여 보조 함수를 사용하는 문제도 지원합니다.
-
-## Mock과 실제 실행
-
-### Live demo
-
-상단 **Live**에 처음 들어가면 Problem designer가 LeetCode Easy 수준의 문제 설명을 작성하고 역할 평가를 받습니다. 왼쪽은 생성된 문제, 중앙은 Python 3.12 코드 편집기, 오른쪽은 Code reviewer와 Test runner 결과입니다. 기본값은 **FULL / Mock Agent / Mock Judge**이며, 상단에서 모델·모드를 바꾸고 **새 문제**를 누르면 다음 문제에 적용됩니다. **L1+L2**도 지원합니다.
-
-1. 문제 생성·역할 평가가 끝나면 함수 서명을 유지해 코드를 작성하고 **Submit** 또는 **⌘/Ctrl+Enter**를 누릅니다.
-2. Reviewer는 제출 코드를 정적으로 검토하며 오류의 위치·원인·영향을 설명합니다. Runner는 동일한 제출 코드와 고정 테스트를 기존 격리 환경에서 실행합니다. 두 역할 모두 코드·테스트를 수정하거나 풀이를 제공하지 않습니다.
-3. 오른쪽 **Results**에서 제출별 결과를 선택할 수 있습니다. **이 제출 코드 불러오기**는 해당 제출 당시의 코드를 편집기로 가져옵니다. 작성 중인 코드는 현재 브라우저 탭에 저장되며 `?live=세션ID` 주소에서 문제와 서버에 저장된 제출 기록을 다시 열 수 있습니다.
-4. 하단은 현재 문제의 생성 1회와 모든 제출에 대한 역할별 지표입니다. M1·M2·M3는 최초 응답 기준 통과/준수 판정률, 준수 응답 제공률은 최종 준수 응답/전체 호출입니다. M4·Decision coverage는 **같은 문제·역할의 최근 최초 응답 최대 5건**으로 계산하며 5건 미만은 Warmup입니다. Judge 유효 판정률은 스키마·인용 검증 통과율이고, Judge의 실제 정확도는 아닙니다. 코드의 테스트 통과 여부는 별도로 Runner의 도구 결과에 표시합니다.
-
-Live는 저장소에 준비된 **원본 Easy 명세 5종**(누적 합·고유 문자·두 수의 합·괄호·정렬 목록 병합)에서 문제를 선택합니다. LeetCode 문제를 수집·복사하지 않으며, Designer는 기존 역할 경계에 맞춰 원본 명세를 문제문으로 작성합니다. 테스트와 참조 구현은 서버에 고정하고, Reviewer·Runner 입력에는 참조 정답을 전달하지 않습니다. **새 문제**는 직전과 다른 명세를 선택합니다. 역할 평가를 통과하지 못한 응답은 Live 풀이 화면에 공개하지 않고 상세 기록에 보존합니다.
-
-Mock Agent·Judge는 연결 시연용 고정 응답입니다. **실제 코드 실행 여부는 모델과 별개인 서버의 `SANDBOX_MODE` 설정**을 따르며, Mock sandbox에서는 `not_executed`와 미집계 통계를 표시합니다. 실제 모델 검토에는 Agent·Judge 모델과 API 키가, 실제 코드 실행에는 기존 Docker sandbox 서비스가 필요합니다. 각 생성/제출은 별도 Run과 요청 예산(40회)을 사용하며 기존 worker 큐에서 처리합니다. Live 문제는 HumanEval 선택 목록 및 일괄 실험 데이터에 섞이지 않습니다.
-
-API는 `POST /api/live/sessions`, `GET /api/live/sessions/{id}`, `POST /api/live/sessions/{id}/submissions`이며 생성·제출에 `Idempotency-Key`가 필요합니다. 제출 본문은 `{"code":"..."}`이고 최대 20,000자입니다. `GET`의 `submission_id`로 같은 세션의 과거 제출을 조회할 수 있습니다. 새 DB 테이블이나 migration 없이 기존 Run·Call·Candidate·Job·평가 기록을 재사용합니다.
-
-### 정답·오답 후보 100문제 일괄 실험
-
-상단 **일괄 실험**에서 **후보 코드**를 정답 후보 또는 오답 후보로 선택하여 HumanEval/0~99를 번호순으로 실행할 수 있습니다. 선택한 후보 유형을 100문제 전체에 적용하며, 기본값은 **정답 후보**입니다. 기본 모드는 **L1**, 모델은 **Mock**, 문제당 1 Round입니다. 실제 실험에서는 Agent·Judge 모델을 직접 선택합니다. 선택한 후보 유형은 진행 화면과 일괄 실행 기록에 표시되고, 같은 구성 재실행에도 유지됩니다. 후보 유형이 저장되지 않은 기존 배치는 정답 후보로 처리합니다.
-
-1. 후보 코드, 모드, 문제당 Round, 모델, Run당 요청 한도와 공통 정책·요청을 설정합니다.
-2. **100문제 일괄 실행 시작**을 누르면 100개의 Run을 한 번에 접수합니다. 역할별 준수 출력 1개가 문제 간에 이어집니다. L1은 기본적으로 각 Run의 생성 후 사후 평가까지 끝내고 다음 문제로 넘어갑니다.
-3. 진행 화면에서 문제별 생성·평가 상태와 오류를 확인하고 **기록 열기**로 기존 상세 화면을 봅니다. `?batch=ID` 주소나 일괄 실행 기록에서 다시 열 수 있습니다.
-4. **같은 구성으로 다시 실행**에서 L1+L2 또는 FULL을 선택하면, 문제·후보·모델·정책·요청·Round·예산을 유지한 새 일괄 실험이 만들어집니다. 기존 기록은 보존합니다.
-5. **일괄 실행 기록**에서 해당 배치의 **열기 →** 옆 **결과 다운로드**를 누르면 분석용 CSV를 받습니다. 실행 중·취소된 배치도 다운로드할 수 있습니다.
-6. 배치를 열면 상단 **실험 요약**에서 최초·최종 위반, 준수 응답 제공률, 역할별 Min/Max, L3 복구, Judge 검증 실패, 실행·토큰·시간을 확인합니다. 사건과 Min/Max에서 해당 호출 상세 기록으로 이동할 수 있습니다.
-
-**M4 threshold (%)**는 배치별 분석 설정으로 저장하며 실행 조건과 독립적입니다. 공란은 미설정, 초과 기준은 `M4 > threshold`입니다. 같은 문제·역할의 평가창 5건이 갖춰진 관측만 정식 집계하므로 1 Round 실험은 Warmup으로 표시합니다. 모드 변경 재실행에는 현재 threshold만 이어받습니다. 상세 지표·분모·과거 기록 처리 기준은 [일괄 실험 대시보드 명세](docs/web_guardrail_platform_batch_dashboard_spec_ko.md)를 참고하세요.
-
-실행 순서는 서버 DB에 저장되므로 브라우저를 닫아도 계속됩니다. 기존 단일 worker가 처리하며, 한 문제에서 오류가 발생하면 기록한 뒤 다음 문제로 진행합니다. **남은 실행 취소**는 대기 작업을 취소하고 진행 중인 모델·도구 요청이 반환된 다음 중지합니다. 취소한 일괄 실행은 새 실행으로 다시 시작합니다. 동일 접수 요청의 재전송은 같은 idempotency key를 사용하는 경우 중복 Run을 만들지 않습니다.
-
-새 일괄 실험은 `batch_prompt_cache.version: fixed-prefix-v1`을 배치와 각 Run 설정에 기록합니다. GPT-5.6 이상 모델의 Agent·Judge 요청에서는 기존 사용자 JSON의 공통 역할·요청·정책·평가 기준을 앞에 두고, 그 끝의 명시적 breakpoint만 캐시에 기록합니다(`mode: explicit`, `ttl: 30m`). 문제·응답·이력·복구 피드백은 뒤에 이어지며 JSON 필드 경로와 값, 역할 지침, 동적 few-shot, 출력 스키마, 도구 호출 및 요청 예산은 보존합니다. L1 사후 평가와 Decisions Judge도 이 배치 전송 경로를 사용합니다. Live·단일 실험·이 설정이 없는 기존 배치 재개·지원되지 않는 모델은 기존 전송 형식을 유지합니다. 새 배치로 재실행하면 새 캐시 설정을 사용합니다.
-
-캐시 적중은 동일한 prefix와 최소 길이 등 OpenAI 조건에 따르며 보장되지 않습니다. 짧은 프롬프트를 임의로 늘리거나 사전 준비용 모델 호출을 추가하지 않습니다. 캐시 메타데이터로 입력 byte 예산을 넘으면 해당 요청은 기존 형식으로 보냅니다. 실제 전송한 payload와 API의 `usage.input_tokens_details.cached_tokens`, `cache_write_tokens`는 요청 기록에 저장되므로 읽기·쓰기 비용을 함께 비교할 수 있습니다. `store: false`는 유지합니다. [OpenAI Prompt Caching](https://developers.openai.com/api/docs/guides/prompt-caching)
-
-각 배치는 빈 이력에서 시작합니다. HumanEval/0의 첫 Round는 세 역할 모두 `history: []`이며, 이후에는 같은 배치의 앞선 문제·Round에서 **자기 역할의 최신 준수 출력 1개**만 전달합니다. 준수 출력이 아직 없으면 계속 비워 두고, 이후 위반·불확실이 발생해도 이전 준수 출력은 유지합니다. 다른 역할·다른 배치·재실행 원본 배치의 출력은 가져오지 않습니다. 단독 Run에서는 같은 Run의 이전 Round만 검색합니다.
-
-이력 채택 조건은 완료된 호출의 **최종 선택 응답**, 현재 실행과 같은 평가 버전, 유효한 schema/evidence 검증, 최종 종합 판정 `compliant`입니다. 평가기 v3는 서버·Judge의 최종 적용 기준이 모두 준수인 `history_eligible`을 요구하며, 구형 평가기는 원래 Judge INFO/SCOPE/EXEC 모두 준수 조건을 유지합니다. L3 복구가 준수로 완료되면 복구 출력만 채택하고 최초 위반 출력은 제외합니다. 이력에는 `raw_text`와 출처 문제·call·response·evaluation ID 및 응답 버전만 포함합니다. 과거 문제·코드 입력, 사용자 요청, 다른 역할 출력, Judge 설명, 도구 결과는 첨부하지 않습니다. Runner는 과거 성공 보고를 현재 테스트의 실행 근거로 사용하지 않습니다.
-
-L1의 자동 사후 평가를 끄면 준수 판정이 없어 이력이 쌓이지 않습니다. 켜면 이전 Run의 사후 평가가 끝난 후 다음 문제에 이력이 전달됩니다. 여러 Round인 L1에서는 현재 Run의 모든 생성이 끝나야 사후 평가가 시작되므로, 같은 Run 안에서는 이전 문제에서 얻은 이력이 유지됩니다. L1+L2/FULL은 각 호출의 온라인 평가 후 다음 Round에도 최신 이력을 사용할 수 있습니다. history 수집을 위한 추가 모델 요청은 없습니다.
-
-2026-10-06 변경 이후 새 실행은 `history_limit=1`입니다. 기존 `history_limit=5` 실행과 저장 snapshot은 원래 방식으로 보존하며, 기존 배치에서 **같은 구성으로 다시 실행**해도 새 배치에는 1개 규칙을 적용합니다. 화면은 실제 실행 설정에 맞춰 `History 0/1`, `1/1` 또는 과거 기록의 `/5`와 출처 문제를 표시합니다. 기본 L3 `feedback`은 최초 요청에 고정된 준수 이력을 유지하며, 비교 전략 `reset`은 제거하고 `retry`는 유지합니다. M4 등 지표 창은 기존의 같은 문제·역할별 최근 5개 최초 응답 기준으로 유지합니다.
-
-선택한 유형의 후보 100개를 순차 실행하며, 5번째마다 오답으로 바꾸는 혼합 시퀀스는 지원하지 않습니다. 선택한 유형의 후보가 누락되거나 중복된 문제가 있으면 일부만 접수하지 않고 전체 요청을 거부합니다. 모드 변경 재실행 시 원본 문제·후보 해시가 바뀌었어도 요청을 거부합니다.
-
-100문제·1 Round 기준으로 L1은 생성 400회와 선택적인 사후 평가 300회, L1+L2/FULL은 기본 700회 요청입니다. 복구·재시도는 추가됩니다. UI의 요청 한도는 **각 Run**에 적용되며, L1 사후 평가는 같은 크기의 별도 한도를 사용합니다. 기본 한도는 Run당 1,000회입니다.
-
-| API | 기능 |
-|---|---|
-| `POST /api/batches` | 100문제 접수. `candidate_label`(`correct`/`incorrect`, 기본 `correct`), `mode`, `rounds`, `agent_model`, `judge_model`, `prompts_by_role`, `budget`, `policy_raw`, `evaluate_l1` 사용 |
-| `GET /api/batches` | 일괄 실행 목록·진행 상태, offset/limit 지원 |
-| `GET /api/batches/{id}` | 고정 manifest와 문제별 Run·사후 평가 상태 |
-| `GET /api/batches/{id}/results.csv` | 해당 배치의 분석용 CSV 다운로드. 기존 인증 필요 |
-| `GET /api/batches/{id}/analytics` | 요약·역할별 지표·복구·Judge 검증·비용·시간·사건 목록 |
-| `PUT /api/batches/{id}/analysis-settings` | `m4_threshold`(0~1 또는 null), 현재 `revision`으로 분석 설정 저장 |
-| `POST /api/batches/{id}/rerun` | `{"mode":"L1+L2"}` 등으로 모드만 바꿔 새 일괄 실행 접수 |
-| `POST /api/batches/{id}/cancel` | 진행 중·대기 작업 취소 |
-
-생성·재실행 API는 `Idempotency-Key`가 필요하며 기존과 같은 인증을 사용합니다. `0002` migration이 `app.batches`를 추가합니다. 기존 환경은 `./start.sh`로 새 코드·화면과 migration을 반영하세요. 이 기능 추가만으로 실제 모델 실험을 자동 실행하지는 않습니다.
-
-`0003` migration은 기존 배치에 분석 설정을 추가합니다. Judge 검증은 새 실행부터 schema·필수 인용·공급자·예산 실패를 구분하고 모든 검증 시도를 보존합니다. 과거 기록은 저장된 검증 로그로 집계하되 확인할 수 없는 실패 유형은 `분류 불가`로 표시합니다. 인용 일치율은 Judge의 의미적 정확도가 아닙니다.
-
-LLM Judge의 공통 판정 기준(`common_rubric`), 세 역할별 기준(`role_rubrics`), 검증 실패 재시도 지침(`retry_instruction`)은 [policies/judge.yaml](policies/judge.yaml)의 `structured_evaluation`에서 편집합니다. 이전 v2 지침·예시는 [policies/judge_legacy.yaml](policies/judge_legacy.yaml)에 분리되어 있으며 v3 요청에는 포함하지 않습니다. Agent 역할 정책은 [policies/default.yaml](policies/default.yaml)에서 관리합니다. Judge 파일의 필수 항목 누락·빈 문구·중복 키·잘못된 역할은 오류로 처리하며 기본 문구로 대체하지 않습니다.
-
-새 실행은 Designer의 문제 설명·서명·입출력·예시·제약과 Reviewer의 **summary·findings·uncertainties**를 JSON Schema로 반환합니다. 기본 정책 1.5.0의 `reviewer-json-v2`에서 `limitations` 필드와 반복적인 미실행 한계 문구 요구를 제거했습니다. 정적 검토·허위 실행 주장 금지는 유지합니다. 이전 `reviewer-json-v1` 기록·재개는 기존 네 필드 규격을 따르고, 화면도 저장된 한계를 표시합니다. Reviewer의 `findings: []`는 화면에서 “정적 검토에서 확인된 오류 없음”으로 표시하며 오류별 위치·원인·영향을 요구하지 않습니다. 원본 JSON과 파싱 결과는 보존됩니다. 서버가 확인한 허용 서명이나 오류 없음 문구 자체를 Judge가 위반 증거로 인용하면 Agent L3 대신 Judge 검증 재시도를 수행하고, 끝내 실패하면 평가 오류로 기록합니다. [설계와 검증 기록](docs/judge_structured_validation_plan_ko.md)을 참고하세요.
-
-역할 경계 few-shot은 Agent 정책의 역할별 `few_shot_examples`와 Judge 파일의 역할별 `few_shot_examples`에서 관리합니다. 기본 정책 1.5.0에는 Agent 예시 11개(Designer 2, Reviewer 4, Runner 5)가 있습니다. Judge v3에는 14개(Designer 3, Reviewer 10, Runner 1)가 있으며 기존 v2 예시 19개는 호환용으로 보존합니다. HumanEval 실험 문제와 별도로 만든 예시이며, Agent에는 준수 응답을, Judge에는 참고 자료·평가 대상·규칙별 기대 JSON 판정을 제공합니다. Judge의 위반 예시는 정확한 증거 인용과 역할별 기준 및 증거 경로를 평가 프로필 생성 시 검증합니다. 예시의 라벨은 작성된 기대 판정이며 실제 모델의 성능 검증 결과가 아닙니다.
-
-새 Judge 프로필 `guardrail-3.1` / `field-evidence-2`는 같은 역할의 예시에서 반복되는 참고 자료·판정을 공유 표로 전송합니다. 사례·판정·사유·인용은 모두 복원 가능하며, 의미 기준은 축약된 공통·역할 지침에 유지합니다. 실제 대상의 원문·디코딩된 증거 필드, 원본 문제·후보 코드, 서버 판정과 보호 구간은 유지하고 서버 결과의 중복된 응답·필드·형식 검사만 요청에서 제외합니다. 전체 검사 자료는 DB에 보존합니다. 이전 프로필은 기존 요청 형식을 유지합니다. 기본 예시 첫 사례의 요청 JSON 문자 수는 Designer 23.3%, Reviewer 32.4%, Runner 17.1% 감소했으며 실제 토큰 수나 모델 정확도 개선을 뜻하지는 않습니다.
-
-2026-10-09 정책·Judge 압축 검증: 전체 백엔드 회귀 테스트 218개 통과(PostgreSQL 통합 1개 제외), 이후 Live 세션의 요청문 고정과 프롬프트 압축 관련 검증을 추가 수행했습니다. 프런트엔드 12개 테스트와 빌드도 통과했습니다. 기존 v2 정의·예시의 동일성, 저장된 v3 설정으로 만든 요청의 변경 전후 동일성, 공유 예시의 완전한 복원을 확인했습니다. 실제 LLM 판정 비교는 수행하지 않았습니다.
-
-Agent 예시는 L1 / L1+L2 / FULL의 역할 프롬프트에만 포함됩니다. Judge는 평가 대상 역할의 예시만 받고, 실제 대상 응답과 예시를 분리합니다. Agent 예시를 Judge 정책 요구사항으로 다시 전달하지 않습니다. 예시 없는 기존 정책과 저장된 평가 프로필도 지원합니다. 기존 배치의 모드 변경 재실행은 이전 Agent 정책을 유지하고 Judge는 새 배치 생성 시 최신 파일을 읽습니다. 세 Agent에도 새 기본 예시를 적용하려면 화면을 새로고침하고 새 실험을 생성하세요. 이번 few-shot 추가는 평가 권한·서버 검사·L3 발동 조건을 변경하지 않습니다.
-
-단일·일괄 실험의 **검증된 복구 사례를 누적 few-shot으로 적용**은 기본으로 켜져 있습니다(`learned_few_shot: true`). 종료된 이전 실험의 `FULL → feedback → 응답 변경 → 준수 판정` 기록에서 같은 정책·Agent 모델·sandbox 환경·평가 버전에 맞는 사례를 고릅니다. 최초 위반과 복구 준수 모두 Judge 검증을 통과해야 하며, 복구 응답은 준수 이력에도 사용 가능한 상태여야 합니다. Judge 판정 오류, 불확실·미해결 복구, 응답을 바꾸지 않은 재판정, 진행 중인 배치의 결과는 제외합니다. Mock 사례는 Mock에만 적용됩니다.
-
-DB의 기존 응답·평가 기록을 누적 사례 저장소로 사용합니다. 새 실험을 생성할 때 최근의 서로 다른 문제 사례를 역할별 최대 3개 선택하고 `few_shot_snapshot`에 원문·출처·개선 항목·해시를 고정합니다. 사례 하나는 6,000 bytes, 역할별 목록은 12,000 bytes 이하이며, 초과한 사례는 자르지 않고 제외합니다. Agent에는 해당 역할의 입력과 검증된 수정 후 출력만 추가하고, 현재와 같은 문제 ID 또는 문제문인 사례는 제외합니다. Runner 예시에는 수정 후 보고와 일치하는 기존 도구 결과를 함께 제공합니다. 실제 적용 내용은 호출의 입력 snapshot에서 확인할 수 있습니다.
-
-실험 실행·L3 재시도 중에는 예시를 바꾸지 않습니다. 배치 전체와 **같은 구성으로 다시 실행**, 평가 후 모드 비교는 같은 예시 사본을 사용합니다. 새로 쌓인 복구 사례까지 반영하려면 새 실험을 생성하세요. Base·Live 및 기존에 생성된 실행에는 누적 예시를 추가하지 않습니다. 옵션을 끄면 기본 역할 예시만 사용하므로 적용 효과를 비교할 수 있습니다. 역할 정책과 Judge 기준·`evaluation_version`은 그대로 두고 예시 버전은 별도 SHA-256으로 기록합니다. 이 기능은 과거 검증 결과를 재사용하는 프롬프트 개선이며, 모델 가중치 학습이나 개선 절차 자체의 진화는 아닙니다. 실제 정확도·준수율 향상은 별도 비교 실험으로 확인해야 합니다.
-
-일괄 실험 대시보드의 **Few-shot feedback loop · 적용 시도**는 누적 예시가 실제 저장된 역할 프롬프트에 포함되고 Agent 요청 기록이 있는 경우를 호출·응답 버전별 1회로 집계합니다. 최초 응답과 L3 복구를 나누고 역할별 횟수·서로 다른 사용 사례 수를 표시합니다. 예시 여러 개를 한 번에 사용하거나 API 재시도·Runner 도구 후속 요청을 해도 중복 집계하지 않습니다. 요청 실패·진행 중도 적용 시도에 포함하되, 입력 snapshot만 생성한 경우·같은 문제라 제외된 예시·기본 YAML 예시·Judge 요청은 제외합니다. 예를 들어 Reviewer의 최초·복구 응답에 같은 누적 사례 2개를 사용하면 적용은 2회, 사용된 사례는 2개입니다. 적용 기록에서 호출과 예시 출처를 확인할 수 있으며, 별도 카운터 없이 기존 DB 기록으로 계산합니다. 이 값은 새 사례 생성 또는 개선 성공 횟수가 아니며, 누적 예시 설정이 없는 과거 실행은 `기록 없음`으로 표시합니다.
-
-새 실험과 재평가 검증 세트를 만들 때 Judge 파일을 읽어 `evaluation_profile`에 저장합니다. 한 배치의 모든 Run은 같은 사본을 사용하며, 실제 Judge 요청과 재시도는 저장된 사본을 사용합니다. 문구 변경은 새 설정의 `evaluation_version`에 반영되고, 기존 실험·검증 세트 및 검증된 평가 기준을 사용하는 비교 실험은 고정된 기준을 유지합니다. Docker에서는 파일을 이미지에 포함하므로 편집 후 `docker compose build api`와 `docker compose up -d --no-deps api worker`로 반영합니다. 실행 중인 실험이 끝난 뒤 재시작하세요.
-
-Judge 검증 수정 프로필 `guardrail-3.2`는 모든 판정의 `reason`에 `minLength: 1`과 `pattern: "\\S"`를 적용해 빈 문자열·공백만 있는 이유를 차단합니다. `validation_protocol: all-schema-errors-1`은 해석 가능한 JSON의 스키마 오류를 기준·필드 경로·오류 코드별로 모두 수집하며, `failed_rules`와 요약 `error`가 온라인 평가 및 저장 응답 재평가의 다음 Judge 요청에 전달됩니다. 기존 프로필은 저장된 스키마와 검증 동작을 유지합니다. 배치 `30655c50`의 실패 응답 15개(빈 이유 43개)는 회귀 테스트 fixture로 보존했습니다. `gpt-5.4-nano`의 새 스키마 수용과 응답 검증을 확인했으며, 실제 실험의 실패율 개선은 별도 재평가가 필요합니다.
-
-### 저장 응답 재평가
-
-배치의 **저장 응답 재평가 → 재평가 준비·기록 열기**에서 다음 순서로 진행합니다. 준비·검토만으로 실제 모델을 호출하지 않습니다.
-
-1. 종료된 배치에서 **검증 세트 준비**를 누릅니다. 초기·복구 응답 전체와 정상/위반 합성 사례를 고정하고, 정책·Judge·출력 한도로 평가 버전을 만듭니다. Experiment 01은 저장 응답 132개이며 기본 정책의 합성 사례는 12개입니다.
-2. 역할 정책·원문·실행 증거를 확인하고 사례별 기대 C/V/U, 근거, 검토자를 저장합니다. 합성 사례의 제안도 검토가 필요합니다. 모든 사례와 정책을 확인한 뒤 **검토 확정**을 누릅니다.
-3. **재평가 실행**을 누르면 Judge만 호출하는 별도 작업이 등록됩니다. 원본 응답·선택 결과·M4·L3는 유지됩니다. 고정된 요청 한도 안에서 검증/전송 재시도는 각각 최대 한 번이며, 중단 시 저장된 공급자 응답을 재사용합니다. 완료된 오류를 다시 측정하려면 새 재평가 실행을 만드세요.
-4. 동일 저장 사례의 FP/FPR·FN·탐지율·U·오류와 역할별 혼동 행렬, 합성 사례 일치, schema/evidence 실패를 확인합니다. **Judge 요청·응답 로그 보기**와 **재평가 결과 CSV 다운로드**로 근거를 분석합니다. 기대 U는 이진 지표에서 제외하고, 평가 오류를 준수로 계산하지 않습니다.
-5. 실제 Judge의 완료 결과가 검증 기준을 충족하면 **같은 평가 기준으로 비교 실험 시작**에서 L1/L1+L2/FULL을 생성합니다. Round 조건(최대 3개)을 분리하고, 필요하면 FULL의 feedback/reset/retry를 비교합니다. reset/retry는 피드백 없이 이력을 각각 제거/유지하는 대조 조건입니다. Mock는 품질 검증 통과 근거로 사용하지 않습니다.
-
-새 작업은 `0005`의 별도 검토·재평가·요청 테이블에 저장됩니다. 기존 `/runs/{id}/evaluate`는 원래 Base/L1 사후 평가로 유지됩니다. 재평가에는 기존 Run당 예산 대신 **재평가 실행 전체의 전용 요청 예산**을 적용합니다. 예를 들어 132개 응답 + 12개 합성 사례는 기본 144회, 재시도 포함 최대 576회입니다(설정한 전체 예산 이내). 실제 모델 실행은 버튼을 눌렀을 때만 시작합니다.
-
-| API | 용도 |
-|---|---|
-| `GET/POST /api/batches/{id}/review-sets` | 검증 세트 목록 / 준비 |
-| `GET /api/review-sets/{id}` | 고정 입력·정책·기대 판정·실행 이력 |
-| `PUT /api/review-sets/{id}/cases/{case_id}/label` | revision을 확인하여 사람의 검토 저장 |
-| `POST /api/review-sets/{id}/seal` | 모든 사례와 정책 검토 확정 |
-| `POST /api/review-sets/{id}/execute` | 새 Judge 재평가 접수 |
-| `GET /api/reevaluations/{id}` | 진행률·판정·검증 지표 |
-| `GET /api/reevaluations/{id}/cases/{case_id}` | 사례별 Judge 요청·응답 감사 로그 |
-| `POST /api/reevaluations/{id}/cancel`, `/resume` | 중단 / 미완료 작업 재개 |
-| `GET /api/reevaluations/{id}/results.csv` | 고정 사례당 한 행의 결과 CSV |
-| `POST /api/reevaluations/{id}/comparisons/start` | 검증된 평가 기준으로 모드·Round·복구 전략별 신규 배치 생성 |
-
-준비·실행·후속 비교 접수는 `Idempotency-Key`가 필요합니다. 검증 기준과 분모는 [저장 응답 검증 계획](docs/stored_response_validation_plan_ko.md)에 정리했습니다.
-
-### 일괄 실험 결과 CSV
-
-CSV는 **문제 × Round × 역할별 한 행**이며, 100문제·1 Round이면 헤더를 제외하고 300행입니다. 기존 30문제 배치는 90행을 유지합니다. HumanEval 번호, 역할 호출 순서로 정렬하고, 최초·복구 응답을 같은 행에 저장해 토큰을 중복 집계하지 않습니다. 선택한 배치 전체를 내려받으므로 목록의 페이지 크기나 현재 열어 둔 배치와 무관합니다.
-
-| 열 | 의미 |
-|---|---|
-| `csv_schema_version`, `exported_at`, `batch_id`, `source_batch_id`, `batch_status` | CSV 형식 버전(5), 다운로드 시각, 배치와 원본 배치, 다운로드 시점의 상태 |
-| `analysis_revision`, `m4_threshold` | 다운로드 시점의 분석 설정 revision과 threshold(0~1, 미설정은 빈 값) |
-| `batch_index`, `source_task_id`, `task_sha256`, `candidate_sha256`, `run_id` | 문제 순번, 데이터·후보 식별 및 Run 연결 |
-| `mode`, `agent_model`, `judge_model`, `sandbox_mode`, `policy_hash`, `evaluation_version`, `max_requests` | 실행 당시 고정된 비교 조건 |
-| `round_index`, `role`, `call_status`, `generation_job_status`, `offline_job_status` | Round·역할별 생성과 사후 평가 진행 상태 |
-| `initial_response_text`, `recovery_response_text`, `final_response_text`, `selected_response_version` | 최초·복구·최종 선택 응답. 아직 선택되지 않은 최종 응답은 빈 값 |
-| `output_contract`, `evaluator_generation` | 응답 출력 계약과 평가기 세대. 기존 기록에 없는 출력 계약은 공란 |
-| `evaluation_phase`, `initial_*`, `recovery_*`, `final_*` | L1은 Offline, L1+L2·FULL은 Online 평가. 최초·복구·최종 선택의 종합·Lexical·적용 INFO/SCOPE/EXEC 판정, 원래 Judge 근거와 인용·실행 검증 결과 |
-| `initial_schema_valid`, `initial_evidence_valid`, `initial_validation_failure_kind` 등 | 최초·복구·최종 선택 평가의 구조화된 검증 결과. `evidence_required`로 인용 검사 대상 여부 구분. 과거 미기록 값은 빈 값 |
-| `recovery_strategy`, `recovery_feedback`, `recovery_effect` | 복구 전략, 원본 응답·확인된 위반 피드백, 응답 변경·동일 응답 재판정·평가 오류 해소의 구분 |
-| `learned_few_shot`, `few_shot_sha256`, `few_shot_example_ids` | CSV schema v5: 누적 예시 적용 설정·고정 예시 버전·해당 호출에 적용한 사례 ID. 아직 입력 snapshot이 없으면 사례 ID는 빈 값 |
-| `*_judgment_resolution`, `*_uncertainty_reasons` | 서버/Judge 적용 판정·주체·충돌 및 불확실성 원인. 과거 미측정 판정 충돌은 새로 추정하지 않음 |
-| `initial_window_count`, `initial_V`, `initial_C`, `initial_U`, `initial_role_violation_rate`, `initial_decision_coverage`, `initial_warmup` | 최초 응답 기준 역할별 최근 최대 5건의 저장된 지표. 배치 전체의 비율이 아님 |
-| `agent_*`, `judge_*` | Agent와 선택 평가 단계의 Judge 요청·실패 건수, 사용량 보고 건수, 입력·출력·합계 토큰. 후속 요청·재시도·복구 포함 |
-| `started_at`, `finished_at`, `generation_duration_ms` | UTC 시각과 역할 호출 처리 시간. 온라인 평가·복구를 포함하며 L1 사후 평가 시간은 제외 |
-| `run_error`, `call_error`, `job_errors`, `request_errors`, `tool_results` | 오류와 도구 실행 결과. 구조화된 상세 값은 JSON 문자열 |
-
-대기·실패·취소된 역할도 행을 유지합니다. 미평가는 `not_evaluated`, 미생성 응답·미보고 토큰은 빈 값이며 Mock이 보고한 0토큰과 구분합니다. 일부 요청만 사용량이 있으면 알려진 합계와 `*_usage_reported_requests`를 함께 제공합니다. PostgreSQL에서는 하나의 읽기 전용 snapshot으로 조회하므로 다운로드 중 실행이 진행되어도 파일 안의 상태·결과·사용량은 같은 시점을 나타냅니다. 다운로드는 모델 호출이나 실행 상태 변경을 일으키지 않습니다.
-
-파일은 한글을 지원하는 **UTF-8 BOM CSV**입니다. 문자열의 쉼표·인용부호·줄바꿈은 CSV 규칙으로 인용하며, 스프레드시트 수식으로 해석될 수 있는 문자열 앞에는 작은따옴표를 붙입니다. 분석 시 해당 문자열의 접두사에 유의하세요.
-
-### Mock 모델
-
-`mock`은 그래프와 UI 검증용 고정 응답입니다. 실제 모델의 코드 검토 능력이나 Guardrail 효과를 측정하지 않습니다. 사용자 요청에 다음 문자열을 넣으면 복구 동작을 확인할 수 있습니다.
-
-- `[mock:recover]`: designer/reviewer의 최초 응답에 위반을 만들고 복구 응답은 준수합니다.
-- `[mock:violate]`: 최초 및 복구 응답에 위반을 만들어 미해결 상태를 확인합니다.
-
-**Mock 모델과 sandbox 설정은 독립적입니다.** 기본 `SANDBOX_MODE=docker`에서는 mock runner도 실제 원본 테스트 실행을 요청합니다. 코드 실행 없이 UI·DB·그래프만 확인하려면 `.env`에서 `SANDBOX_MODE=mock`으로 바꾸고 `docker compose up -d`로 반영하세요. 이 경우 도구 결과는 `not_executed`, `mock: true`로 저장됩니다. 실제 pytest 결과처럼 표시하지 않습니다.
-
-### 실제 모델
-
-초기 adapter는 OpenAI Responses API를 사용합니다. `OPENAI_API_KEY`가 이미 셸 환경변수로 export되어 있다면 `.env`에는 허용할 모델 이름만 설정하세요. 예를 들어:
-
-```dotenv
-OPENAI_MODELS=gpt-5.4-nano,gpt-5.6-luna
-```
-
-키가 설정된 터미널에서 API·worker를 재생성합니다. Docker Compose는 셸의 `OPENAI_API_KEY`를 worker에 전달합니다. 셸 환경변수는 `.env`보다 우선하며, `.env`의 `OPENAI_API_KEY=`가 비어 있어도 셸의 키를 사용합니다. 셸에 키가 없다면 로컬 `.env`에 설정할 수도 있습니다.
-
-```sh
-docker compose up -d --force-recreate api worker
-```
-
-화면을 새로고침하고 **Agent 모델**과 **Judge 모델**에서 사용할 모델을 각각 선택한 뒤 **새 실행 시작**을 누르세요. 기존 run의 모델 설정은 바뀌지 않습니다. 모델 이름 여러 개는 쉼표로 구분합니다.
-
-GPT-5.6 Luna의 API 모델 ID는 `gpt-5.6-luna`입니다. 같은 허용 목록을 단일·일괄 실험의 Agent/Judge, 저장 응답 재평가의 Judge, Judge 전용 재실행 화면에서 사용하므로 각 화면에서 이 모델을 선택할 수 있습니다. GPT-5.6 Luna는 현재 adapter가 사용하는 Responses API, function calling, structured outputs를 지원합니다. 지원 기능은 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.6-luna)에서 확인할 수 있습니다. 기본 선택값은 `mock`이며, 실제 호출에는 해당 모델 접근 권한이 있는 API 키가 필요합니다.
-
-모델은 해당 계정에서 Responses API를 지원해야 하며, runner 모델은 function calling, Judge 모델은 JSON 출력을 지원해야 합니다. 특정 모델을 자동 선택하거나 유료 검증 호출을 실행하지 않습니다. API 키는 worker에만 전달하고 업무 DB에는 저장하지 않습니다. GPT-5.4 nano의 지원 기능과 상태는 [공식 모델 문서](https://developers.openai.com/api/docs/models/gpt-5.4-nano)에서 확인할 수 있습니다.
-
-Judge는 `text.format.type=json_object`를 사용하며, `input`의 developer 메시지에도 JSON 출력 지시를 넣습니다. `instructions`에만 JSON 지시가 있으면 공급자가 입력 검증 단계에서 HTTP 400을 반환할 수 있습니다. 이 오류가 발생했던 기존 환경은 `./start.sh`로 재빌드한 뒤 새 실행을 시작하세요. 기존 오류 기록은 보존합니다. 공급자 오류에는 상세 메시지와 문제 필드(`param`)를 함께 표시하며, 원본 응답은 호출 상세의 `response_payload`에서 확인할 수 있습니다.
-
-### 예산
-
-Run 설정의 `max_requests`는 Agent·Judge·전송 재시도·복구를 포함한 온라인 요청 수 상한입니다. Offline 평가는 별도의 동일 상한을 적용합니다. 각 요청에 입력 byte 상한과 출력 token 상한도 적용하며, 초과 시 입력을 임의로 잘라내지 않고 오류를 저장합니다. 공급자가 반환한 사용량은 요청별로 저장합니다.
-
-각 역할의 위반율·Decision coverage 아래에서 현재 Round의 Agent 입력·출력·합계 토큰을 확인할 수 있습니다. 최초·도구 후속·복구·사용량이 보고된 재시도를 합산하며 Judge 평가 요청은 제외합니다. 그 아래 **LLM Judge 토큰 사용량**은 선택한 Online/Offline 단계의 최초·복구 평가와 재시도를 합산합니다. 최초/복구 탭을 바꾸어도 각 합계는 같으며, Online/Offline 탭을 바꾸면 Judge 사용량만 해당 평가 단계에 맞춰 바뀝니다. Mock은 0, 사용량이 없는 요청은 `—` 또는 일부 미집계 안내로 구분하고, 비활성 Judge에는 `평가 비활성`을 표시합니다. 기존 실행 기록도 저장된 사용량을 표시합니다. 금액 환산 UI는 포함하지 않으므로 실제 공급자의 과금 상한 설정도 함께 사용하세요.
-
-Round는 세 Agent를 순서대로 한 번씩 실행하는 반복 단위입니다. Online은 응답 생성 과정의 평가로, L1+L2·FULL에서 Judge를 호출합니다. Offline은 Base·L1 실행 종료 후 저장된 출력을 평가하는 기능으로, Agent 생성이나 테스트 도구 실행을 반복하지 않고 Judge API만 호출합니다.
-
-실행 기록 대시보드의 **모델 유형**에서 전체·Mock·Live를 선택할 수 있습니다. 저장된 모델 설정을 기준으로 Agent·Judge가 모두 `mock`이면 Mock, 하나 이상 실제 API 모델이면 Live입니다. Live 표시는 API 호출 성공 여부를 뜻하지 않으며, Base/L1에서 아직 사용하지 않은 Judge 설정도 포함합니다. Sandbox 설정과는 독립적입니다. 기존 기록에도 적용되며 모드·상태·날짜 필터와 함께 사용할 수 있습니다. 목록에는 유형과 Agent·Judge 모델을 함께 표시합니다. `GET /api/runs?model_type=mock` 또는 `model_type=live`로 조회하며, 필터를 적용한 전체 건수와 페이지를 반환합니다.
-
-## 테스트와 검증 상태
-
-일반 테스트는 SQLite와 메모리 checkpointer를 **테스트 harness에서만** 사용합니다. 운영 경로는 PostgreSQL과 PostgresSaver입니다. SQLite 테스트 성공을 실제 PostgreSQL 통합 검증으로 간주하지 않습니다.
-
-```sh
-# 모델 비용 없이 로직·API·worker 테스트
-make test
-
-# Node.js 22: 토큰 집계 테스트
-npm --prefix frontend test
-
-# 실제 PostgreSQL migration 및 재개 검사
-# 임시 guardrail_test_* DB를 생성·검증·삭제합니다. 업무 DB는 삭제하지 않습니다.
-docker compose run --rm --no-deps worker python /workspace/scripts/verify_postgres.py
-
-# 실제 sandbox: 원본 정답/오답 테스트와 동일 operation 재사용 확인
-docker compose run --rm --no-deps worker python /workspace/scripts/verify_sandbox.py
-```
-
-2026-10-09 100문제 확장 검증: Python 자동 테스트 **210개 통과·PostgreSQL 통합 1개 제외**, 프런트엔드 테스트 **11개 통과**, TypeScript·Vite 빌드 통과. 네트워크가 차단된 실제 sandbox에서 원본 테스트를 실행해 **정답 100개 통과·오답 100개 실패**를 확인했습니다. 원본 164개 레코드와 직접 대조했으며 기존 30문제는 그대로 보존했습니다. 기존 3·30문제 DB의 추가 seed, 정답·오답 배치의 100문제 순차 실행, 기존 30문제 배치 재실행 보존도 자동 테스트에 포함합니다. 실제 모델 API 호출과 운영 DB 변경은 수행하지 않았습니다.
-
-이전 30문제 버전에서 확인한 결과:
-
-| 검사 | 결과 |
-|---|---|
-| Python 로직·API·LangGraph·worker 자동 테스트 | 145개 통과(역할별 최신 준수 history·배치 간 격리·few-shot·평가 v2·feedback 복구·CSV·대시보드·재평가·Judge YAML 설정 고정 포함). PostgreSQL 통합 테스트 1개는 로컬 실행에서 제외하고 아래 별도 환경에서 검증 |
-| 프런트엔드 토큰 집계 테스트 | 8개 통과 |
-| 실제 PostgreSQL 테스트 | 별도 임시 DB에서 1개 통과: L1 사후 평가 후 다음 문제의 같은 역할에 준수 history 전달, 기존 schema 업그레이드, checkpoint 재개, 일괄 작업 의존 순서·취소, CSV·분석 API의 읽기 전용 조회·JSONB 사용량, 분석 설정 저장 및 기존 데이터 보존 |
-| TypeScript 타입 검사 및 Vite production build | 통과 |
-| Python 문법 컴파일 및 Compose 설정 검사 | 통과 |
-| 실제 PostgreSQL·PostgresSaver 연결 | 임시 PostgreSQL 통합 테스트에서 확인 |
-| Docker 앱 이미지 빌드 | 통과. 실제 sandbox 코드 실행은 이번 변경에서 재검증하지 않음 |
-| 브라우저 화면 및 실제 서버 구동 | Mock 전용 임시 환경에서 L1→L1+L2→FULL 각 30문제 완료, 새로고침·상세 이동·모바일 화면 확인. CSV 버튼 위치, 완료·실행 중 배치 다운로드, 오류 후 재시도 및 파일의 90행 검증. 대시보드 threshold 저장·유지, 초과·Min/Max의 정확한 호출 이동, Judge 실패 필터, Warmup 표시, 판정 충돌·미해결 상세 이동, 도움말과 390px 모바일 화면 확인 |
-| 실제 공급자 호출 | 미실행 |
-
-로직 검증에는 네 모드의 실제 payload 차이, lexical 통과/실패 모두 Judge 호출, 잘못된 인용 재시도, 역할별 준수 history 0/1건·배치 간 격리·L1 사후 평가 연계·기존 5건 방식 호환, FULL 복구 1회, runner 도구 재사용, offline의 생성 비변경, 예산 초과, 취소·재개, 업무 결과 저장 후 장애 재개를 포함합니다.
-
-## 로컬 개발
-
-Python 3.12 및 Node.js 22를 기준으로 구성했습니다. PostgreSQL은 별도로 실행해야 합니다. 아래 명령은 저장소 루트에서 실행합니다.
-
-```sh
-python3.12 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
-cd frontend
-npm ci
-npm run build
-cd ..
-```
-
-서버 프로세스에 `DATABASE_URL`, `APP_USERNAME`, `APP_PASSWORD`, `SANDBOX_MODE`를 환경변수로 설정합니다. Docker 외의 로컬 실행은 `.env`를 자동으로 읽지 않습니다.
-
-```sh
-export PYTHONPATH="$PWD/backend"
-# DATABASE_URL은 postgresql+psycopg://... 형식
-.venv/bin/alembic -c backend/alembic.ini upgrade head
-.venv/bin/python -m app.seed
-.venv/bin/uvicorn app.api:app --host 127.0.0.1 --port 8000
-# 별도 터미널, 동일 환경변수
-.venv/bin/python -m app.worker
-# UI 개발 서버는 frontend/에서 npm run dev
-```
-
-## 구현 구조와 운영 범위
-
-```text
-backend/app/
-  api.py          인증, REST API, 정적 UI 제공
-  contracts.py    설정·역할·평가 schema, 정책 parser
-  services.py     실행 계획, 역할 DTO, history snapshot
-  graphs.py       Agent graph와 별도 offline graph
-  runtime.py      모델 전송·예산·도구 멱등성
-  providers.py    mock 및 OpenAI adapter
-  evaluation.py   lexical·인용·실행 근거·지표 계산
-  worker.py       PostgreSQL queue, lease, checkpoint 재개
-  db.py           실험·검토·재평가 업무 테이블
-  batches.py      정답·오답 후보 manifest, 순차 접수, 진행 집계·취소
-  dataset.py      원본 부분집합 검증, 문제 목록·개수 제공
-  reevaluation*.py 고정 검증 세트, 사람 검토, Judge 전용 재평가·지표·API
-  validation_cases.py 합성 정상/위반 사례와 미검토 기대 판정 제안
-sandbox/          executor와 격리된 pytest wrapper
-frontend/src/     실행 화면과 대시보드
-data/             원본 100문제(0~99), 출처 해시, 라이선스
-policies/         기본 역할 정책
-```
-
-완료된 생성 실패는 이력에 남는 실험 결과입니다. **재개**는 중단된 작업과 아직 실행하지 않은 작업을 이어가며, 완료된 실패를 새 관측으로 재생성하지 않습니다. FULL 미해결도 종료된 결과입니다. 다시 실험하려면 새 run을 만드세요.
-
-모델 API 응답 수신과 DB 저장 사이의 장애에서는 공급자 중복 호출 가능성이 있습니다. 도구는 실행 기록이 불명확할 때 자동으로 새 컨테이너를 실행하지 않습니다. Executor journal과 컨테이너 상태를 먼저 조회하며, 둘이 불일치하면 운영 오류를 유지합니다.
-
-Sandbox는 네트워크 차단, 읽기 전용 root, 비특권 사용자, capability 제거, CPU·메모리·PID·시간 제한을 구성합니다. Docker socket은 executor에만 연결합니다. 실행 코드의 로그 파일에는 1 MiB 제한이 적용되며, 한도 초과는 실행 오류로 남습니다. 격리 설정의 실제 동작 확인은 위 live 검증과 배포 환경 점검이 필요합니다.
-
-구현 시 참고한 공식 자료: [LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence), [Postgres checkpointer](https://pypi.org/project/langgraph-checkpoint-postgres/3.1.2/), [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling), [Docker 컨테이너 제한](https://docs.docker.com/reference/cli/docker/container/run/).
-
-### 평가 v2와 Feedback 복구
-
-새 실행은 역할별 Judge 기준, Runner 서버 검사와의 충돌 처리, 인용 검증 실패 피드백을 사용합니다. Judge 재검증과 FULL 복구는 각각 최대 한 번입니다. FULL 복구는 원본 응답과 확인된 위반을 전달하는 feedback 전략이며 도구 결과를 재사용합니다. 특정 금지 문자열은 부정·안내 문맥에서도 위반입니다.
-
-대시보드는 미해결 원인·U 원인·분모·충돌·동일 응답 재판정을 표시합니다. CSV schema v3는 미선택 복구 평가와 복구 피드백도 포함합니다. 기존 실험의 평가 버전과 reset 전략은 유지됩니다. 적용 시 `alembic upgrade head`로 nullable 컬럼을 추가하는 0004 마이그레이션을 실행합니다.
-
-구현 범위와 검증 기준: [Experiment 01 후속 개선 계획](docs/experiment01_improvement_plan_ko.md).
